@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-const SITE_PASSWORD = process.env.SITE_PASSWORD || 'M##';
+const SITE_PASSWORD = process.env.SITE_PASSWORD || 'N##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
 // Express Middleware Setup
@@ -53,7 +53,7 @@ async function verifyTurnstile(token, ip) {
 }
 
 /* ==========================================================================
-   TRANSPORTER POOLING (Fast Socket Connections)
+   TRANSPORTER POOLING
    ========================================================================== */
 function getTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -64,8 +64,8 @@ function getTransporter(email, appPassword) {
       service: "gmail",
       auth: { user: cleanEmail, pass: appPassword },
       pool: true,
-      maxConnections: 5, // Fast execution ke liye multi-sockets
-      maxMessages: 100
+      maxConnections: 1,
+      maxMessages: 20
     });
     transporters.set(cacheKey, transporter);
   }
@@ -73,7 +73,7 @@ function getTransporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   SPINTAX PARSER ({Hi|Hello|Hey}) - Important for Inbox Delivery
+   SPINTAX PARSER ({Hi|Hello|Hey})
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -91,7 +91,7 @@ function parseSpintax(text) {
 }
 
 /* ==========================================================================
-   PLAIN-TEXT FALLBACK (Prevent Spam Filter Block)
+   PLAIN-TEXT CONVERTER
    ========================================================================== */
 function convertHtmlToText(html) {
   if (!html) return "";
@@ -144,7 +144,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   SSE STREAM ROUTE (FAST PACING WITH INBOX OPTIMIZATION)
+   SSE STREAM ROUTE (PACED SENDING)
    ========================================================================== */
 app.post("/api/send-stream", async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -191,20 +191,10 @@ app.post("/api/send-stream", async (req, res) => {
       const spunBody = parseSpintax(messageBody);
       const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
 
-      // Clean Domain Message-ID Header generation
-      const domain = senderEmail.split('@')[1] || 'gmail.com';
-      const msgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 8)}@${domain}>`;
-
       const mailOptions = {
         from: cleanSenderName ? `"${cleanSenderName}" <${senderEmail}>` : senderEmail,
         to: recipient,
-        replyTo: senderEmail,
-        subject: spunSubject,
-        headers: {
-          'Message-ID': msgId,
-          'X-Priority': '3',
-          'Importance': 'Normal'
-        }
+        subject: spunSubject
       };
 
       if (isHtml) {
@@ -222,10 +212,15 @@ app.post("/api/send-stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: error.message })}\n\n`);
     }
 
-    // FAST & SAFE PACING: 1.5 - 3.0 Seconds Delay
+    // Safety Delay (.05 to .08 seconds per mail)
     if (index < recipients.length - 1) {
-      const randomDelay = Math.floor(1500 + Math.random() * 1500);
-      await new Promise(resolve => setTimeout(resolve, randomDelay));
+      const randomDelay = Math.floor(300 + Math.random() * 300);
+      const delayIntervals = Math.floor(randomDelay / 600);
+
+      for (let i = 0; i < delayIntervals; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        res.write(': keep-alive\n\n');
+      }
     }
   }
 
