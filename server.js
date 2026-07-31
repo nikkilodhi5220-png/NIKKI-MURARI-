@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-const SITE_PASSWORD = process.env.SITE_PASSWORD || 'P##';
+const SITE_PASSWORD = process.env.SITE_PASSWORD || 'M##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
 // Express Middleware Setup
@@ -53,7 +53,7 @@ async function verifyTurnstile(token, ip) {
 }
 
 /* ==========================================================================
-   TRANSPORTER POOLING
+   TRANSPORTER POOLING (Fast Pool Configuration)
    ========================================================================== */
 function getTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -64,8 +64,8 @@ function getTransporter(email, appPassword) {
       service: "gmail",
       auth: { user: cleanEmail, pass: appPassword },
       pool: true,
-      maxConnections: 1,
-      maxMessages: 20
+      maxConnections: 5,  // Fast sending ke liye connections badhaye hain
+      maxMessages: 100
     });
     transporters.set(cacheKey, transporter);
   }
@@ -91,7 +91,7 @@ function parseSpintax(text) {
 }
 
 /* ==========================================================================
-   PLAIN-TEXT CONVERTER
+   PLAIN-TEXT CONVERTER (Dual MIME for Spam Prevention)
    ========================================================================== */
 function convertHtmlToText(html) {
   if (!html) return "";
@@ -144,7 +144,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   SSE STREAM ROUTE (PACED SENDING)
+   SSE STREAM ROUTE (FASTER PACING: 1.5s - 2.5s DELAY)
    ========================================================================== */
 app.post("/api/send-stream", async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -212,15 +212,10 @@ app.post("/api/send-stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: error.message })}\n\n`);
     }
 
-    // Safety Delay (5 to 10 seconds per mail)
+    // SPEED OPTIMIZATION: Reduced delay to 1.5 - 2.5 seconds
     if (index < recipients.length - 1) {
-      const randomDelay = Math.floor(5000 + Math.random() * 5000);
-      const delayIntervals = Math.floor(randomDelay / 1000);
-
-      for (let i = 0; i < delayIntervals; i++) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        res.write(': keep-alive\n\n');
-      }
+      const fastDelay = Math.floor(1500 + Math.random() * 1000);
+      await new Promise(resolve => setTimeout(resolve, fastDelay));
     }
   }
 
