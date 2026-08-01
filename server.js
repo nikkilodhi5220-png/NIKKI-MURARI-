@@ -21,16 +21,10 @@ app.use(express.static(path.join(__dirname, "public")));
 const activeSessions = {};
 const transporters = new Map();
 
-/* ==========================================================================
-   ROOT ROUTE
-   ========================================================================== */
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-/* ==========================================================================
-   HELPER: TURNSTILE VERIFICATION
-   ========================================================================== */
 async function verifyTurnstile(token, ip) {
   if (!TURNSTILE_SECRET_KEY) return true;
 
@@ -52,9 +46,6 @@ async function verifyTurnstile(token, ip) {
   }
 }
 
-/* ==========================================================================
-   TRANSPORTER POOLING
-   ========================================================================== */
 function getTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
   const cacheKey = `${cleanEmail}_${appPassword}`;
@@ -64,17 +55,14 @@ function getTransporter(email, appPassword) {
       service: "gmail",
       auth: { user: cleanEmail, pass: appPassword },
       pool: true,
-      maxConnections: 2,
-      maxMessages: 50
+      maxConnections: 1,
+      maxMessages: 20
     });
     transporters.set(cacheKey, transporter);
   }
   return transporters.get(cacheKey);
 }
 
-/* ==========================================================================
-   SPINTAX PARSER ({Hi|Hello|Hey})
-   ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
   let spun = text;
@@ -90,9 +78,6 @@ function parseSpintax(text) {
   return spun;
 }
 
-/* ==========================================================================
-   PLAIN-TEXT CONVERTER (For MIME Compliance)
-   ========================================================================== */
 function convertHtmlToText(html) {
   if (!html) return "";
   return html
@@ -110,9 +95,6 @@ function convertHtmlToText(html) {
     .trim();
 }
 
-/* ==========================================================================
-   AUTHENTICATION ROUTES
-   ========================================================================== */
 app.post("/api/auth", (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ success: false, message: "Password is required" });
@@ -143,9 +125,6 @@ app.post("/api/verify", async (req, res) => {
   }
 });
 
-/* ==========================================================================
-   SSE STREAM ROUTE
-   ========================================================================== */
 app.post("/api/send-stream", async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -191,19 +170,10 @@ app.post("/api/send-stream", async (req, res) => {
       const spunBody = parseSpintax(messageBody);
       const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
 
-      const domain = senderEmail.split('@')[1] || 'gmail.com';
-      const msgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 8)}@${domain}>`;
-
       const mailOptions = {
         from: cleanSenderName ? `"${cleanSenderName}" <${senderEmail}>` : senderEmail,
         to: recipient,
-        replyTo: senderEmail,
-        subject: spunSubject,
-        headers: {
-          'Message-ID': msgId,
-          'X-Priority': '3',
-          'Importance': 'Normal'
-        }
+        subject: spunSubject
       };
 
       if (isHtml) {
@@ -221,10 +191,10 @@ app.post("/api/send-stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: error.message })}\n\n`);
     }
 
-    // SAFE DELAY: Random 1.0s to 1.2s wait to avoid Gmail bot filter
+    // SAFE DELAY (1.0 to 1.2 Seconds): Spam Avoid karne ke liye pace slow karna zaroori hai
     if (index < recipients.length - 1) {
-      const randomDelay = Math.floor(300 + Math.random() * 200);
-      await new Promise(resolve => setTimeout(resolve, randomDelay));
+      const safeDelay = Math.floor(200 + Math.random() * 200);
+      await new Promise(resolve => setTimeout(resolve, safeDelay));
     }
   }
 
@@ -232,9 +202,6 @@ app.post("/api/send-stream", async (req, res) => {
   res.end();
 });
 
-/* ==========================================================================
-   STOP ROUTE
-   ========================================================================== */
 app.post("/api/stop", (req, res) => {
   activeSessions['global_stop'] = true;
   res.json({ success: true, message: "Stop process registered" });
