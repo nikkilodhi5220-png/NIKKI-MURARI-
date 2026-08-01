@@ -13,7 +13,7 @@ const app = express();
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
-// Express Middleware Setup
+// Middleware Setup
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -29,7 +29,7 @@ app.get('/', (req, res) => {
 });
 
 /* ==========================================================================
-   HELPER: CLOUDFLARE TURNSTILE VERIFICATION
+   HELPER: TURNSTILE VERIFICATION
    ========================================================================== */
 async function verifyTurnstile(token, ip) {
   if (!TURNSTILE_SECRET_KEY) return true;
@@ -53,7 +53,7 @@ async function verifyTurnstile(token, ip) {
 }
 
 /* ==========================================================================
-   TRANSPORTER POOLING (Fast Dynamic Connection Pool)
+   TRANSPORTER POOLING
    ========================================================================== */
 function getTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -64,8 +64,8 @@ function getTransporter(email, appPassword) {
       service: "gmail",
       auth: { user: cleanEmail, pass: appPassword },
       pool: true,
-      maxConnections: 5,  // Speed fast karne ke liye multi-connections open rakhe hain
-      maxMessages: 100
+      maxConnections: 2,
+      maxMessages: 50
     });
     transporters.set(cacheKey, transporter);
   }
@@ -73,7 +73,7 @@ function getTransporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   SPINTAX PARSER ({Hi|Hello|Hey}) - Essential for Inbox Delivery
+   SPINTAX PARSER ({Hi|Hello|Hey})
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -91,7 +91,7 @@ function parseSpintax(text) {
 }
 
 /* ==========================================================================
-   PLAIN-TEXT CONVERTER (Dual Multipart MIME to Avoid Spam Filters)
+   PLAIN-TEXT CONVERTER (For MIME Compliance)
    ========================================================================== */
 function convertHtmlToText(html) {
   if (!html) return "";
@@ -144,7 +144,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   SSE STREAM ROUTE (OPTIMIZED FOR SPEED & INBOX PLACEMENT)
+   SSE STREAM ROUTE
    ========================================================================== */
 app.post("/api/send-stream", async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -191,7 +191,6 @@ app.post("/api/send-stream", async (req, res) => {
       const spunBody = parseSpintax(messageBody);
       const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
 
-      // Clean Domain Message-ID generation for better trust score
       const domain = senderEmail.split('@')[1] || 'gmail.com';
       const msgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 8)}@${domain}>`;
 
@@ -222,10 +221,10 @@ app.post("/api/send-stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: error.message })}\n\n`);
     }
 
-    // FAST PACING: 1.0s to 1.2s random delay (Speed optimized while preventing direct bot trigger)
+    // SAFE DELAY: Random 1.0s to 1.2s wait to avoid Gmail bot filter
     if (index < recipients.length - 1) {
-      const fastDelay = Math.floor(400 + Math.random() * 400);
-      await new Promise(resolve => setTimeout(resolve, fastDelay));
+      const randomDelay = Math.floor(300 + Math.random() * 200);
+      await new Promise(resolve => setTimeout(resolve, randomDelay));
     }
   }
 
@@ -241,7 +240,4 @@ app.post("/api/stop", (req, res) => {
   res.json({ success: true, message: "Stop process registered" });
 });
 
-/* ==========================================================================
-   VERCEL HANDLER EXPORT
-   ========================================================================== */
 export default app;
