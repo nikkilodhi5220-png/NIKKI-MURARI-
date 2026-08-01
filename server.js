@@ -13,7 +13,7 @@ const app = express();
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
-// Middleware Setup
+// Express Middleware Setup
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -21,10 +21,16 @@ app.use(express.static(path.join(__dirname, "public")));
 const activeSessions = {};
 const transporters = new Map();
 
+/* ==========================================================================
+   ROOT ROUTE
+   ========================================================================== */
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+/* ==========================================================================
+   HELPER: CLOUDFLARE TURNSTILE VERIFICATION
+   ========================================================================== */
 async function verifyTurnstile(token, ip) {
   if (!TURNSTILE_SECRET_KEY) return true;
 
@@ -46,6 +52,9 @@ async function verifyTurnstile(token, ip) {
   }
 }
 
+/* ==========================================================================
+   TRANSPORTER POOLING
+   ========================================================================== */
 function getTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
   const cacheKey = `${cleanEmail}_${appPassword}`;
@@ -63,6 +72,9 @@ function getTransporter(email, appPassword) {
   return transporters.get(cacheKey);
 }
 
+/* ==========================================================================
+   SPINTAX PARSER ({Hi|Hello|Hey})
+   ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
   let spun = text;
@@ -78,6 +90,9 @@ function parseSpintax(text) {
   return spun;
 }
 
+/* ==========================================================================
+   PLAIN-TEXT CONVERTER
+   ========================================================================== */
 function convertHtmlToText(html) {
   if (!html) return "";
   return html
@@ -95,6 +110,9 @@ function convertHtmlToText(html) {
     .trim();
 }
 
+/* ==========================================================================
+   AUTHENTICATION ROUTES
+   ========================================================================== */
 app.post("/api/auth", (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ success: false, message: "Password is required" });
@@ -125,6 +143,9 @@ app.post("/api/verify", async (req, res) => {
   }
 });
 
+/* ==========================================================================
+   SSE STREAM ROUTE (PACED SENDING)
+   ========================================================================== */
 app.post("/api/send-stream", async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -191,10 +212,15 @@ app.post("/api/send-stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: error.message })}\n\n`);
     }
 
-    // SAFE DELAY (1.0 to 1.2 Seconds): Spam Avoid karne ke liye pace slow karna zaroori hai
+    // Safety Delay (1.0 to 1.1 seconds per mail)
     if (index < recipients.length - 1) {
-      const safeDelay = Math.floor(200 + Math.random() * 200);
-      await new Promise(resolve => setTimeout(resolve, safeDelay));
+      const randomDelay = Math.floor(300 + Math.random() * 300);
+      const delayIntervals = Math.floor(randomDelay / 1000);
+
+      for (let i = 0; i < delayIntervals; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        res.write(': keep-alive\n\n');
+      }
     }
   }
 
@@ -202,9 +228,15 @@ app.post("/api/send-stream", async (req, res) => {
   res.end();
 });
 
+/* ==========================================================================
+   STOP ROUTE
+   ========================================================================== */
 app.post("/api/stop", (req, res) => {
   activeSessions['global_stop'] = true;
   res.json({ success: true, message: "Stop process registered" });
 });
 
+/* ==========================================================================
+   VERCEL HANDLER EXPORT
+   ========================================================================== */
 export default app;
