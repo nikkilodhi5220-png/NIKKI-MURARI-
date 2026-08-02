@@ -216,9 +216,9 @@ app.post("/api/send-stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: error.message })}\n\n`);
     }
 
-    // Organic Human Pacing (0.5s to 1.0s random delay between emails)
+    // Organic Human Pacing (3.5s to 7.0s random delay between emails)
     if (index < recipients.length - 1) {
-      const safeDelay = Math.floor(300 + Math.random() * 300);
+      const safeDelay = Math.floor(3500 + Math.random() * 3500);
       await new Promise(resolve => setTimeout(resolve, safeDelay));
     }
   }
