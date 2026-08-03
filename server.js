@@ -178,8 +178,8 @@ app.post("/api/send-stream", async (req, res) => {
 
     // Dynamic Human-like Delay Logic
     if (i < recipients.length - 1) {
-      // Basic Delay: 2.0s to 2.1s
-      let delay = Math.floor(400 + Math.random() * 300);
+      // Basic Delay: 1.0s to 1.1s
+      let delay = Math.floor(300 + Math.random() * 200);
 
       // Warm-Up Cooldown: Har 10 Mails ke baad extra 15-20 Second ka ब्रेक (Bot Trap se bachne ke liye)
       if ((i + 1) % 10 === 0) {
