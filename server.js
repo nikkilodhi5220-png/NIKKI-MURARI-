@@ -21,7 +21,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. UNIQUE CODE GENERATOR (Inboxing & Fingerprint Avoidance)
+   1. UNIQUE CODE GENERATOR
    ========================================================================== */
 function generateUniqueCode(prefix = 'REF', length = 6) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -34,11 +34,10 @@ function generateUniqueCode(prefix = 'REF', length = 6) {
 }
 
 /* ==========================================================================
-   2. FIXED & STABLE SMTP TRANSPORTER ENGINE
+   2. OPTIMIZED SMTP TRANSPORTER (With Timeout Guards)
    ========================================================================== */
 function createTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  // Gmail App Password me spaces hote hain (e.g. "abcd efgh ijkl mnop"), unhe remove karna zaroori hai
   const cleanPass = appPassword ? appPassword.replace(/\s+/g, '').trim() : '';
 
   return nodemailer.createTransport({
@@ -50,16 +49,16 @@ function createTransporter(email, appPassword) {
       pass: cleanPass
     },
     tls: {
-      rejectUnauthorized: false // Port block aur self-signed certificate failures bypass karne ke liye
+      rejectUnauthorized: false
     },
-    connectionTimeout: 15000, // 15 Seconds
-    greetingTimeout: 15000,
-    socketTimeout: 20000
+    connectionTimeout: 12000, // 12s Connection Timeout
+    greetingTimeout: 10000,
+    socketTimeout: 15000     // 15s Socket Timeout
   });
 }
 
 /* ==========================================================================
-   3. SPINTAX & TEXT CLEANER UTILITIES
+   3. SPINTAX & TEXT CLEANER
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -88,8 +87,6 @@ function createPlainTextFromHtml(html) {
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
     .replace(/\n\s*\n/g, '\n\n')
     .trim();
 }
@@ -121,29 +118,34 @@ app.post('/api/verify', async (req, res) => {
     await transporter.verify();
     return res.json({ success: true, message: "SMTP Connection Verified" });
   } catch (err) {
-    console.error("Verification Error:", err.message);
-    return res.status(401).json({ success: false, message: `SMTP Connection Failed: ${err.message}` });
+    return res.status(401).json({ success: false, message: `SMTP Failed: ${err.message}` });
   }
 });
 
 /* ==========================================================================
-   5. STREAMING DISPATCH ENGINE (Fixed Sending Loop)
+   5. FIXED STREAMING DISPATCH (Progress Master Sync Engine)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
+  // SSE Headers Setup
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
+  
+  // Immidiately flush headers so the frontend connection connects without hanging
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
 
   const { email, appPassword, senderName, subject, messageBody, recipients, sessionId, codePrefix } = req.body;
 
   if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Input" })}\n\n`);
     res.end();
     return;
   }
 
-  const currentSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  const currentSessionId = sessionId || `session_${Date.now()}`;
   activeSessions.add(currentSessionId);
 
   const cleanEmail = email.toLowerCase().trim();
@@ -151,14 +153,18 @@ app.post('/api/send-stream', async (req, res) => {
   const senderDomain = cleanEmail.split('@')[1] || 'gmail.com';
   const prefix = (codePrefix || 'REF').toUpperCase().trim();
 
-  // Create standard transporter instance for this batch session
+  const totalRecipients = recipients.length;
+  let successCount = 0;
+  let failedCount = 0;
+
   const transporter = createTransporter(email, appPassword);
 
+  // Ping interval to prevent proxies/Cloudflare timeouts
   const keepAlivePing = setInterval(() => {
     if (!res.writableEnded) {
       res.write(': keep-alive\n\n');
     }
-  }, 5000);
+  }, 4000);
 
   let clientDisconnected = false;
   req.on('close', () => {
@@ -167,7 +173,7 @@ app.post('/api/send-stream', async (req, res) => {
     clearInterval(keepAlivePing);
   });
 
-  for (let i = 0; i < recipients.length; i++) {
+  for (let i = 0; i < totalRecipients; i++) {
     if (!activeSessions.has(currentSessionId) || clientDisconnected) {
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
@@ -176,18 +182,32 @@ app.post('/api/send-stream', async (req, res) => {
     }
 
     const recipient = recipients[i] ? recipients[i].trim() : "";
-    if (!recipient) continue;
+    
+    // Empty recipient row fix
+    if (!recipient) {
+      failedCount++;
+      const currentProgress = Math.round(((i + 1) / totalRecipients) * 100);
+      res.write(`data: ${JSON.stringify({
+        success: false,
+        recipient: "N/A",
+        error: "Empty Email Address",
+        current: i + 1,
+        total: totalRecipients,
+        progress: currentProgress,
+        successCount,
+        failedCount,
+        sessionId: currentSessionId
+      })}\n\n`);
+      continue;
+    }
+
+    const uniqueCode = generateUniqueCode(prefix, 6);
+    const trackingHash = crypto.randomBytes(4).toString('hex');
 
     try {
-      // 1. Generate Unique Code & Tracking Hash
-      const uniqueCode = generateUniqueCode(prefix, 6); // Output: e.g. REF-8K2P9X
-      const trackingHash = crypto.randomBytes(4).toString('hex');
-
-      // 2. Parse Spintax
       let spunSubject = parseSpintax(subject);
       let spunBody = parseSpintax(messageBody);
 
-      // 3. Replace {CODE}, [[CODE]], {REF} Placeholders
       spunSubject = spunSubject
         .replace(/{CODE}/g, uniqueCode)
         .replace(/\[\[CODE\]\]/g, uniqueCode)
@@ -235,35 +255,52 @@ app.post('/api/send-stream', async (req, res) => {
         mailOptions.text = spunBody;
       }
 
-      // Send Mail Execution
+      // Safe Send Execution
       const sendInfo = await transporter.sendMail(mailOptions);
-      console.log(`[SUCCESS] Email Sent -> ${recipient} | Code: ${uniqueCode}`);
+      successCount++;
 
+      const currentProgress = Math.round(((i + 1) / totalRecipients) * 100);
+
+      // Emit Live Progress to Frontend Progress Master
       if (!res.writableEnded && !clientDisconnected) {
         res.write(`data: ${JSON.stringify({ 
           success: true, 
           recipient, 
           generatedCode: uniqueCode,
           messageId: sendInfo.messageId,
+          current: i + 1,
+          total: totalRecipients,
+          progress: currentProgress,
+          successCount,
+          failedCount,
           sessionId: currentSessionId 
         })}\n\n`);
       }
 
     } catch (err) {
-      console.error(`[SEND FAILURE] -> ${recipient}:`, err.message);
-      
+      failedCount++;
+      const currentProgress = Math.round(((i + 1) / totalRecipients) * 100);
+
+      console.error(`[SEND FAILED] ${recipient}:`, err.message);
+
       if (!res.writableEnded && !clientDisconnected) {
         res.write(`data: ${JSON.stringify({ 
           success: false, 
           recipient, 
-          error: err.message || "Email sending failed" 
+          error: err.message || "Sending failed",
+          current: i + 1,
+          total: totalRecipients,
+          progress: currentProgress,
+          successCount,
+          failedCount,
+          sessionId: currentSessionId 
         })}\n\n`);
       }
     }
 
-    // Dynamic Human Delay (1.2s - 1.8s)
-    if (i < recipients.length - 1 && activeSessions.has(currentSessionId) && !clientDisconnected) {
-      const delay = Math.floor(1200 + Math.random() * 600);
+    // Dynamic Human Delay (1.0s - 1.5s)
+    if (i < totalRecipients - 1 && activeSessions.has(currentSessionId) && !clientDisconnected) {
+      const delay = Math.floor(1000 + Math.random() * 500);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -284,7 +321,7 @@ app.post('/api/stop', (req, res) => {
   } else {
     activeSessions.clear();
   }
-  res.json({ success: true, message: "Process stopped successfully" });
+  res.json({ success: true, message: "Stopped successfully" });
 });
 
 app.listen(PORT, () => {
