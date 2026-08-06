@@ -4,7 +4,6 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,28 +22,25 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   PORT 587 ENGINE (Explicit TLS & High Security Pool)
+   PORT 587 ENGINE (Standard Modern TLS & Secure Pool)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
-  const key = `port587_${email.toLowerCase().trim()}_${appPassword}`;
+  const cleanEmail = email.toLowerCase().trim();
+  const key = `port587_${cleanEmail}_${appPassword}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
-      port: 587,             // PORT 587 (Explicit TLS)
-      secure: false,        // Port 587 ke liye false hona chahiye
-      requireTLS: true,     // Force Security Handshake
+      port: 587,
+      secure: false,        // Explicit TLS (STARTTLS)
+      requireTLS: true,      // Security Handshake
       auth: {
-        user: email.toLowerCase().trim(),
+        user: cleanEmail,
         pass: appPassword
       },
       pool: true,
-      maxConnections: 3,    // Fast Processing
-      maxMessages: 100,
-      tls: {
-        rejectUnauthorized: false,
-        ciphers: 'SSLv3'
-      }
+      maxConnections: 2,    // Optimized for Gmail limits
+      maxMessages: 50
     });
 
     poolMap.set(key, transporter);
@@ -121,7 +117,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH (Speed: 1.1s - 1.2s on Port 587)
+   STREAMING DISPATCH (Safe Delay & Clean Headers for Maximum Inboxing)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -143,9 +139,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const keepAlivePing = setInterval(() => {
     res.write(': keep-alive\n\n');
-  }, 9000);
-
-  const senderDomain = cleanEmail.split('@')[1] || 'gmail.com';
+  }, 5000);
 
   for (let i = 0; i < recipients.length; i++) {
     if (globalSession.stopRequested) {
@@ -158,34 +152,17 @@ app.post('/api/send-stream', async (req, res) => {
 
     try {
       const transporter = getPort587Transporter(email, appPassword);
-      
-      const spunSubject = parseSpintax(subject);
-      let spunBody = parseSpintax(messageBody);
 
-      // Inboxing Tracker Hash Generator
-      const messageHash = crypto.randomBytes(3).toString('hex');
+      const spunSubject = parseSpintax(subject);
+      const spunBody = parseSpintax(messageBody);
       const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
 
-      if (isHtml) {
-        spunBody += `<br><span style="display:none;font-size:1px;color:#ffffff;">id:${messageHash}</span>`;
-      } else {
-        spunBody += `\n\n[id:${messageHash}]`;
-      }
-
-      // Dynamic Port 587 RFC Message Header
-      const uniqueMsgId = `<${Date.now()}.${messageHash}@${senderDomain}>`;
-
+      // Clean Standard RFC Headers
       const mailOptions = {
         from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
         to: recipient,
         replyTo: cleanEmail,
-        subject: spunSubject,
-        messageId: uniqueMsgId,
-        headers: {
-          'X-Delivery-Context': messageHash,
-          'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-        }
+        subject: spunSubject
       };
 
       if (isHtml) {
@@ -199,14 +176,14 @@ app.post('/api/send-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: true, recipient })}\n\n`);
 
     } catch (err) {
-      console.error(`Port 587 Send Failure to ${recipient}:`, err.message);
+      console.error(`Send Failure to ${recipient}:`, err.message);
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
     }
 
-    // SPEED: 1.1s to 1.2s (1100ms - 1200ms)
+    // SAFE DELAY: 1.0s to 1.5s (Gmail Rate-Limit & Bot Prevention)
     if (i < recipients.length - 1) {
-      const exactDelay = Math.floor(1100 + Math.random() * 100);
-      await new Promise(resolve => setTimeout(resolve, exactDelay));
+      const safeDelay = Math.floor(400 + Math.random() * 300);
+      await new Promise(resolve => setTimeout(resolve, safeDelay));
     }
   }
 
