@@ -13,52 +13,54 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 
-const activeSessions = new Set();
+const globalSession = { stopRequested: false };
+const poolMap = new Map();
 
-// Middlewares
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. UNIQUE CODE GENERATOR
+   FORMATTED CODE GENERATOR (Har Email Ke Liye Unique Code)
    ========================================================================== */
-function generateUniqueCode(prefix = 'REF', length = 6) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let randomStr = '';
-  const bytes = crypto.randomBytes(length);
-  for (let i = 0; i < length; i++) {
-    randomStr += chars[bytes[i] % chars.length];
-  }
-  return `${prefix}-${randomStr}`;
+function generateFormattedCode() {
+  const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+  const randomPart = crypto.randomBytes(3).toString('hex').toUpperCase();
+  // Output Example: REF-260806-A9F12B
+  return `REF-${dateStr}-${randomPart}`;
 }
 
 /* ==========================================================================
-   2. OPTIMIZED SMTP TRANSPORTER (With Timeout Guards)
+   HIGH-SPEED SMTP POOL TRANSPORTER
    ========================================================================== */
-function createTransporter(email, appPassword) {
+function getHighSpeedTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  const cleanPass = appPassword ? appPassword.replace(/\s+/g, '').trim() : '';
+  const key = `pool_${cleanEmail}_${appPassword}`;
 
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // STARTTLS
-    auth: {
-      user: cleanEmail,
-      pass: cleanPass
-    },
-    tls: {
-      rejectUnauthorized: false
-    },
-    connectionTimeout: 12000, // 12s Connection Timeout
-    greetingTimeout: 10000,
-    socketTimeout: 15000     // 15s Socket Timeout
-  });
+  if (!poolMap.has(key)) {
+    const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false, // STARTTLS
+      requireTLS: true,
+      auth: {
+        user: cleanEmail,
+        pass: appPassword
+      },
+      pool: true,             // Multi-connection pooling enable
+      maxConnections: 5,      // High speed parallelism
+      maxMessages: 100,       // Per connection message limit
+      rateLimit: 10           // 10 emails per second max burst rate
+    });
+
+    poolMap.set(key, transporter);
+  }
+
+  return poolMap.get(key);
 }
 
 /* ==========================================================================
-   3. SPINTAX & TEXT CLEANER
+   SPINTAX & PLAIN TEXT PARSERS
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -87,12 +89,14 @@ function createPlainTextFromHtml(html) {
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
     .replace(/\n\s*\n/g, '\n\n')
     .trim();
 }
 
 /* ==========================================================================
-   4. ROUTES & API
+   ROUTES
    ========================================================================== */
 
 app.get('/', (req, res) => {
@@ -114,216 +118,109 @@ app.post('/api/verify', async (req, res) => {
   }
 
   try {
-    const transporter = createTransporter(email, appPassword);
+    const transporter = getHighSpeedTransporter(email, appPassword);
     await transporter.verify();
     return res.json({ success: true, message: "SMTP Connection Verified" });
   } catch (err) {
-    return res.status(401).json({ success: false, message: `SMTP Failed: ${err.message}` });
+    return res.status(401).json({ success: false, message: "Connection Failed" });
   }
 });
 
 /* ==========================================================================
-   5. FIXED STREAMING DISPATCH (Progress Master Sync Engine)
+   HIGH-SPEED SSE STREAM DISPATCH
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
-  // SSE Headers Setup
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-  
-  // Immidiately flush headers so the frontend connection connects without hanging
-  if (typeof res.flushHeaders === 'function') {
-    res.flushHeaders();
-  }
 
-  const { email, appPassword, senderName, subject, messageBody, recipients, sessionId, codePrefix } = req.body;
+  const { email, appPassword, senderName, subject, messageBody, recipients } = req.body;
 
   if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Input" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data" })}\n\n`);
     res.end();
     return;
   }
 
-  const currentSessionId = sessionId || `session_${Date.now()}`;
-  activeSessions.add(currentSessionId);
-
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || "").replace(/"/g, "").trim();
-  const senderDomain = cleanEmail.split('@')[1] || 'gmail.com';
-  const prefix = (codePrefix || 'REF').toUpperCase().trim();
+  globalSession.stopRequested = false;
 
-  const totalRecipients = recipients.length;
-  let successCount = 0;
-  let failedCount = 0;
-
-  const transporter = createTransporter(email, appPassword);
-
-  // Ping interval to prevent proxies/Cloudflare timeouts
   const keepAlivePing = setInterval(() => {
-    if (!res.writableEnded) {
-      res.write(': keep-alive\n\n');
-    }
+    res.write(': keep-alive\n\n');
   }, 4000);
 
-  let clientDisconnected = false;
-  req.on('close', () => {
-    clientDisconnected = true;
-    activeSessions.delete(currentSessionId);
-    clearInterval(keepAlivePing);
-  });
+  const transporter = getHighSpeedTransporter(email, appPassword);
 
-  for (let i = 0; i < totalRecipients; i++) {
-    if (!activeSessions.has(currentSessionId) || clientDisconnected) {
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
-      }
-      break;
-    }
+  // Single Email Process Function
+  async function sendSingleMail(recipient) {
+    if (globalSession.stopRequested) return;
 
-    const recipient = recipients[i] ? recipients[i].trim() : "";
+    const uniqueCode = generateFormattedCode(); // Har email ke liye code generate hoga
     
-    // Empty recipient row fix
-    if (!recipient) {
-      failedCount++;
-      const currentProgress = Math.round(((i + 1) / totalRecipients) * 100);
-      res.write(`data: ${JSON.stringify({
-        success: false,
-        recipient: "N/A",
-        error: "Empty Email Address",
-        current: i + 1,
-        total: totalRecipients,
-        progress: currentProgress,
-        successCount,
-        failedCount,
-        sessionId: currentSessionId
-      })}\n\n`);
-      continue;
+    // Body aur Subject mein Code Add hoga
+    const spunSubject = `${parseSpintax(subject)} [${uniqueCode}]`;
+    let rawBody = parseSpintax(messageBody);
+
+    const isHtml = /<[a-z][\s\S]*>/i.test(rawBody);
+    
+    let finalBodyHtml = "";
+    let finalBodyText = "";
+
+    if (isHtml) {
+      finalBodyHtml = `${rawBody}<br><br><div style="font-size:12px;color:#888888;border-top:1px solid #eee;padding-top:8px;">Reference Code: <strong>${uniqueCode}</strong></div>`;
+      finalBodyText = createPlainTextFromHtml(finalBodyHtml);
+    } else {
+      finalBodyText = `${rawBody}\n\n-------------------\nReference Code: ${uniqueCode}`;
     }
 
-    const uniqueCode = generateUniqueCode(prefix, 6);
-    const trackingHash = crypto.randomBytes(4).toString('hex');
+    const mailOptions = {
+      from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
+      to: recipient,
+      replyTo: cleanEmail,
+      subject: spunSubject,
+      text: finalBodyText,
+      ...(isHtml && { html: finalBodyHtml })
+    };
 
     try {
-      let spunSubject = parseSpintax(subject);
-      let spunBody = parseSpintax(messageBody);
-
-      spunSubject = spunSubject
-        .replace(/{CODE}/g, uniqueCode)
-        .replace(/\[\[CODE\]\]/g, uniqueCode)
-        .replace(/{REF}/g, uniqueCode);
-
-      spunBody = spunBody
-        .replace(/{CODE}/g, uniqueCode)
-        .replace(/\[\[CODE\]\]/g, uniqueCode)
-        .replace(/{REF}/g, uniqueCode);
-
-      const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
-
-      if (isHtml) {
-        spunBody += `
-          <br><br>
-          <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #f0f0f0; font-family: monospace, sans-serif; font-size: 11px; color: #888888;">
-            Reference Code: <strong style="color:#444444;">${uniqueCode}</strong> | Security Hash: <span>${trackingHash}</span>
-          </div>
-          <span style="display:none;font-size:1px;color:#ffffff;">[id:${trackingHash}]</span>
-        `;
-      } else {
-        spunBody += `\n\n-------------------------\nReference Code: ${uniqueCode}\nRef Hash: ${trackingHash}`;
-      }
-
-      const uniqueMsgId = `<${Date.now()}.${uniqueCode.replace('-', '')}@${senderDomain}>`;
-
-      const mailOptions = {
-        from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-        to: recipient,
-        replyTo: cleanEmail,
-        subject: spunSubject,
-        messageId: uniqueMsgId,
-        headers: {
-          'X-Entity-Ref-ID': uniqueCode,
-          'X-Delivery-Context': trackingHash,
-          'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-        }
-      };
-
-      if (isHtml) {
-        mailOptions.html = spunBody;
-        mailOptions.text = createPlainTextFromHtml(spunBody);
-      } else {
-        mailOptions.text = spunBody;
-      }
-
-      // Safe Send Execution
-      const sendInfo = await transporter.sendMail(mailOptions);
-      successCount++;
-
-      const currentProgress = Math.round(((i + 1) / totalRecipients) * 100);
-
-      // Emit Live Progress to Frontend Progress Master
-      if (!res.writableEnded && !clientDisconnected) {
-        res.write(`data: ${JSON.stringify({ 
-          success: true, 
-          recipient, 
-          generatedCode: uniqueCode,
-          messageId: sendInfo.messageId,
-          current: i + 1,
-          total: totalRecipients,
-          progress: currentProgress,
-          successCount,
-          failedCount,
-          sessionId: currentSessionId 
-        })}\n\n`);
-      }
-
+      await transporter.sendMail(mailOptions);
+      res.write(`data: ${JSON.stringify({ success: true, recipient, code: uniqueCode })}\n\n`);
     } catch (err) {
-      failedCount++;
-      const currentProgress = Math.round(((i + 1) / totalRecipients) * 100);
-
-      console.error(`[SEND FAILED] ${recipient}:`, err.message);
-
-      if (!res.writableEnded && !clientDisconnected) {
-        res.write(`data: ${JSON.stringify({ 
-          success: false, 
-          recipient, 
-          error: err.message || "Sending failed",
-          current: i + 1,
-          total: totalRecipients,
-          progress: currentProgress,
-          successCount,
-          failedCount,
-          sessionId: currentSessionId 
-        })}\n\n`);
-      }
-    }
-
-    // Dynamic Human Delay (1.0s - 1.5s)
-    if (i < totalRecipients - 1 && activeSessions.has(currentSessionId) && !clientDisconnected) {
-      const delay = Math.floor(1000 + Math.random() * 500);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      console.error(`Send Error (${recipient}):`, err.message);
+      res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
     }
   }
 
-  activeSessions.delete(currentSessionId);
-  clearInterval(keepAlivePing);
+  // HIGH SPEED BATCHING LOGIC (2 Emails Simultaneously)
+  const CONCURRENCY_LIMIT = 2; // Speed aur Account Safety ka Balance
   
-  if (!clientDisconnected && !res.writableEnded) {
-    res.write("data: [DONE]\n\n");
-    res.end();
+  for (let i = 0; i < recipients.length; i += CONCURRENCY_LIMIT) {
+    if (globalSession.stopRequested) break;
+
+    const chunk = recipients.slice(i, i + CONCURRENCY_LIMIT).map(r => r.trim()).filter(Boolean);
+    
+    // Parallel sending for higher speed
+    await Promise.all(chunk.map(recipient => sendSingleMail(recipient)));
+
+    // Dynamic Small Delay (1.0ms - 1.8ms between batches)
+    if (i + CONCURRENCY_LIMIT < recipients.length) {
+      const pDelay = Math.floor(800 + Math.random() * 400);
+      await new Promise(resolve => setTimeout(resolve, pDelay));
+    }
   }
+
+  clearInterval(keepAlivePing);
+  res.write("data: [DONE]\n\n");
+  res.end();
 });
 
 app.post('/api/stop', (req, res) => {
-  const { sessionId } = req.body;
-  if (sessionId) {
-    activeSessions.delete(sessionId);
-  } else {
-    activeSessions.clear();
-  }
-  res.json({ success: true, message: "Stopped successfully" });
+  globalSession.stopRequested = true;
+  res.json({ success: true, message: "Process stopped successfully" });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on Port ${PORT}`);
+  console.log(`High-Speed Server running on Port ${PORT}`);
 });
