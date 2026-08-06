@@ -13,9 +13,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 
-// Multi-Session Engine & Transporter Pool
 const activeSessions = new Set();
-const poolMap = new Map();
 
 // Middlewares
 app.use(cors());
@@ -23,14 +21,10 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. UNIQUE CODE GENERATOR (Inboxing & Fingerprint Avoidance)
+   1. UNIQUE CODE GENERATOR
    ========================================================================== */
-/**
- * Har mail ke liye Unique Format Code banata hai
- * Example Formats: REF-8X9A2K, TRK-94218, SEC-3M7P0Q
- */
 function generateUniqueCode(prefix = 'REF', length = 6) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Readable characters
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let randomStr = '';
   const bytes = crypto.randomBytes(length);
   for (let i = 0; i < length; i++) {
@@ -40,41 +34,34 @@ function generateUniqueCode(prefix = 'REF', length = 6) {
 }
 
 /* ==========================================================================
-   2. PORT 587 TRANSPORTER POOL (Modern TLS)
+   2. RELIABLE SMTP TRANSPORTER (Fixed TLS & Handshake Timeout)
    ========================================================================== */
-function getPort587Transporter(email, appPassword) {
+function createTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  const key = `port587_${cleanEmail}_${appPassword}`;
+  // Safe App Password cleaning (spaces remove kar do)
+  const cleanPass = appPassword.replace(/\s+/g, '').trim();
 
-  if (!poolMap.has(key)) {
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false,       // STARTTLS
-      requireTLS: true,
-      auth: {
-        user: cleanEmail,
-        pass: appPassword
-      },
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100,
-      tls: {
-        rejectUnauthorized: true,
-        minVersion: 'TLSv1.2'
-      },
-      connectionTimeout: 15000,
-      socketTimeout: 30000
-    });
-
-    poolMap.set(key, transporter);
-  }
-
-  return poolMap.get(key);
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // Port 587 requires STARTTLS
+    auth: {
+      user: cleanEmail,
+      pass: cleanPass
+    },
+    // Connection drop hone se bachane ke liye optimized settings
+    connectionTimeout: 20000, // 20 Seconds
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
+    tls: {
+      rejectUnauthorized: false, // Network/SSL handshake error bypass
+      ciphers: 'SSLv3'
+    }
+  });
 }
 
 /* ==========================================================================
-   3. SPINTAX & TEXT CLEANER UTILITIES
+   3. SPINTAX & TEXT CLEANER
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -103,14 +90,12 @@ function createPlainTextFromHtml(html) {
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
     .replace(/\n\s*\n/g, '\n\n')
     .trim();
 }
 
 /* ==========================================================================
-   4. ROUTES
+   4. ROUTES & API
    ========================================================================== */
 
 app.get('/', (req, res) => {
@@ -125,25 +110,31 @@ app.post('/api/auth', (req, res) => {
   return res.status(401).json({ success: false, message: "Unauthorized Password" });
 });
 
+// SMTP Credentials Verification Endpoint
 app.post('/api/verify', async (req, res) => {
   const { email, appPassword } = req.body;
   if (!email || !appPassword) {
-    return res.status(400).json({ success: false, message: "Credentials Missing" });
+    return res.status(400).json({ success: false, message: "Email and App Password are required" });
   }
 
   try {
-    const transporter = getPort587Transporter(email, appPassword);
+    const transporter = createTransporter(email, appPassword);
     await transporter.verify();
-    return res.json({ success: true, message: "Port 587 Connection Verified" });
+    return res.json({ success: true, message: "SMTP Connection Successful!" });
   } catch (err) {
-    return res.status(401).json({ success: false, message: `Connection Failed: ${err.message}` });
+    console.error("Verification Error:", err.message);
+    return res.status(401).json({ 
+      success: false, 
+      message: `Authentication Failed: ${err.message}` 
+    });
   }
 });
 
 /* ==========================================================================
-   5. STREAMING DISPATCH (Inboxing Engine with Unique Code per Mail)
+   5. STREAMING DISPATCH (Fixed Mail Sending Logic)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
+  // SSE Headers Setup
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -152,12 +143,12 @@ app.post('/api/send-stream', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipients, sessionId, codePrefix } = req.body;
 
   if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid input parameters" })}\n\n`);
     res.end();
     return;
   }
 
-  const currentSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  const currentSessionId = sessionId || `session_${Date.now()}`;
   activeSessions.add(currentSessionId);
 
   const cleanEmail = email.toLowerCase().trim();
@@ -165,9 +156,10 @@ app.post('/api/send-stream', async (req, res) => {
   const senderDomain = cleanEmail.split('@')[1] || 'gmail.com';
   const prefix = (codePrefix || 'REF').toUpperCase().trim();
 
+  // Keep-Alive Ping
   const keepAlivePing = setInterval(() => {
     res.write(': keep-alive\n\n');
-  }, 9000);
+  }, 5000);
 
   let clientDisconnected = false;
   req.on('close', () => {
@@ -176,9 +168,12 @@ app.post('/api/send-stream', async (req, res) => {
     clearInterval(keepAlivePing);
   });
 
+  // Single Transporter Re-used per batch to reduce socket overhead
+  const transporter = createTransporter(email, appPassword);
+
   for (let i = 0; i < recipients.length; i++) {
     if (!activeSessions.has(currentSessionId) || clientDisconnected) {
-      res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ success: false, error: "Process stopped by user" })}\n\n`);
       break;
     }
 
@@ -186,17 +181,15 @@ app.post('/api/send-stream', async (req, res) => {
     if (!recipient) continue;
 
     try {
-      const transporter = getPort587Transporter(email, appPassword);
-      
-      // A. HAR EMAIL KE LIYE UNIQUE CODE GENERATE HO RAHA HAI
-      const uniqueCode = generateUniqueCode(prefix, 6); // Output e.g: REF-8K2P9X
+      // Generate Unique Reference Code & Security Hash
+      const uniqueCode = generateUniqueCode(prefix, 6); // e.g: REF-9X2P8K
       const trackingHash = crypto.randomBytes(4).toString('hex');
 
-      // B. Spintax Process
+      // Process Spintax
       let spunSubject = parseSpintax(subject);
       let spunBody = parseSpintax(messageBody);
 
-      // C. Replace Code Placeholders ({CODE} ya [[CODE]]) in Subject & Body
+      // Replace Placeholders
       spunSubject = spunSubject
         .replace(/{CODE}/g, uniqueCode)
         .replace(/\[\[CODE\]\]/g, uniqueCode)
@@ -207,23 +200,20 @@ app.post('/api/send-stream', async (req, res) => {
         .replace(/\[\[CODE\]\]/g, uniqueCode)
         .replace(/{REF}/g, uniqueCode);
 
-      // D. HTML Inboxing Enhancements (Auto Footer with Unique Code if missing)
       const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
 
       if (isHtml) {
-        // Aesthetic & Anti-Spam Footer Injection
         spunBody += `
           <br><br>
-          <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #f0f0f0; font-family: monospace, sans-serif; font-size: 11px; color: #888888;">
-            Reference Code: <strong style="color:#444444;">${uniqueCode}</strong> | Security Hash: <span>${trackingHash}</span>
+          <div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #eeeeee; font-family: monospace; font-size: 11px; color: #777777;">
+            Ref Code: <strong style="color:#333;">${uniqueCode}</strong> | Security Hash: <span>${trackingHash}</span>
           </div>
           <span style="display:none;font-size:1px;color:#ffffff;">[id:${trackingHash}]</span>
         `;
       } else {
-        spunBody += `\n\n-------------------------\nReference Code: ${uniqueCode}\nRef Hash: ${trackingHash}`;
+        spunBody += `\n\n-------------------------\nRef Code: ${uniqueCode}\nRef Hash: ${trackingHash}`;
       }
 
-      // E. Unique Message-ID & Compliant Headers
       const uniqueMsgId = `<${Date.now()}.${uniqueCode.replace('-', '')}@${senderDomain}>`;
 
       const mailOptions = {
@@ -247,25 +237,33 @@ app.post('/api/send-stream', async (req, res) => {
         mailOptions.text = spunBody;
       }
 
-      await transporter.sendMail(mailOptions);
+      // SEND MAIL
+      const info = await transporter.sendMail(mailOptions);
+      console.log(`[SUCCESS] Mail sent to ${recipient} | Code: ${uniqueCode} | MessageId: ${info.messageId}`);
 
-      // Send Success Event with Generated Code
       res.write(`data: ${JSON.stringify({ 
         success: true, 
         recipient, 
         generatedCode: uniqueCode,
+        messageId: info.messageId,
         sessionId: currentSessionId 
       })}\n\n`);
 
     } catch (err) {
-      console.error(`Send Failure to ${recipient}:`, err.message);
-      res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
+      console.error(`[ERROR] Failed sending to ${recipient}:`, err.message);
+      
+      // Detailed error back to UI
+      res.write(`data: ${JSON.stringify({ 
+        success: false, 
+        recipient, 
+        error: err.message || "Failed to send email" 
+      })}\n\n`);
     }
 
-    // Dynamic Human-like Delay (1.2s - 1.5s)
+    // Dynamic Human Delay (1.5s - 1.6s) to avoid Gmail Rate Limit
     if (i < recipients.length - 1 && activeSessions.has(currentSessionId) && !clientDisconnected) {
-      const exactDelay = Math.floor(1200 + Math.random() * 300);
-      await new Promise(resolve => setTimeout(resolve, exactDelay));
+      const delay = Math.floor(1500 + Math.random() * 1000);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
@@ -285,9 +283,9 @@ app.post('/api/stop', (req, res) => {
   } else {
     activeSessions.clear();
   }
-  res.json({ success: true, message: "Process stopped successfully" });
+  res.json({ success: true, message: "Stopped successfully" });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on Port ${PORT} with Auto Code Generator & Inboxing Engine`);
+  console.log(`Server is running on port ${PORT}`);
 });
