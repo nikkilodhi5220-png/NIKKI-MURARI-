@@ -4,7 +4,6 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,14 +22,8 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. VAULTSAFE CODE GENERATOR & UTILITY FUNCTIONS
+   1. UTILITY FUNCTIONS & SPINTAX
    ========================================================================== */
-
-// Generates Unique VaultSafe Verification Code (Example: VS-SEC-8F3A29)
-function generateVaultSafeCode() {
-  const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `VS-SEC-${randomHex}`;
-}
 
 // Spintax Processor: {Hello|Hi|Greetings}
 function parseSpintax(text) {
@@ -49,7 +42,7 @@ function parseSpintax(text) {
   return spun;
 }
 
-// HTML to Clean Plain Text Converter
+// Convert HTML to Clean Plain Text (Crucial for MIME Compliance & Inboxing)
 function createPlainTextFromHtml(html) {
   if (!html) return "";
   return html
@@ -68,88 +61,59 @@ function createPlainTextFromHtml(html) {
 }
 
 /* ==========================================================================
-   2. VAULTSAFE TEMPLATE MODULE SYSTEM
+   2. CLEAN TEMPLATE ENGINE (No Fake Badges / Spam Triggers)
    ========================================================================== */
-function applyVaultSafeTemplateModule(templateType, bodyContent, vaultCode) {
-  const cleanBody = parseSpintax(bodyContent);
+function processEmailTemplate(templateType, rawBodyContent, cleanEmail) {
+  const cleanBody = parseSpintax(rawBodyContent);
   const isHtml = /<[a-z][\s\S]*>/i.test(cleanBody);
 
-  let finalHtml = "";
-  let finalText = "";
+  let htmlBody = "";
+  let plainTextBody = "";
 
-  // Standard VaultSafe Security Footer
-  const vaultBadgeHtml = `
+  // Standard Compliant Footer (Professional & Clean)
+  const unsubscribeFooterHtml = `
     <br><br>
-    <div style="border-top: 1px solid #e2e8f0; padding-top: 15px; margin-top: 25px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; color: #64748b;">
-      <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 14px; display: inline-block;">
-        🔒 <strong>VaultSafe Protected Message</strong> | Ref Code: <code style="background:#e2e8f0; padding:2px 6px; border-radius:4px; font-weight:bold; color:#0f172a;">${vaultCode}</code>
-      </div>
-      <p style="margin-top: 10px; font-size: 11px; color: #94a3b8;">
-        This email was transmitted via VaultSafe Secure SMTP Relay. To opt-out or unsubscribe, reply with "UNSUBSCRIBE".
-      </p>
+    <div style="border-top: 1px solid #eeeeee; padding-top: 12px; margin-top: 20px; font-family: Arial, sans-serif; font-size: 11px; color: #888888;">
+      This message was sent to you as part of our communication. 
+      If you wish to stop receiving these emails, please reply with "UNSUBSCRIBE".
     </div>
   `;
 
-  const vaultBadgeText = `\n\n--------------------------------------------------\n🔒 [VaultSafe Protection] Ref Code: ${vaultCode}\nTo unsubscribe, reply with "UNSUBSCRIBE".\n--------------------------------------------------`;
+  const unsubscribeFooterText = `\n\n---\nTo unsubscribe from future emails, please reply with "UNSUBSCRIBE".`;
 
-  switch (templateType) {
-    case 'security_alert':
-      finalHtml = `
-        <div style="max-width:600px; margin:0 auto; font-family:sans-serif; border:1px solid #e0e0e0; border-radius:8px; padding:20px;">
-          <div style="background:#1e293b; color:#ffffff; padding:12px 18px; border-radius:6px 6px 0 0; font-weight:bold;">
-            🛡️ VaultSafe Security Notice
-          </div>
-          <div style="padding:20px 0; color:#334155; line-height:1.6;">
-            ${cleanBody}
-          </div>
-          ${vaultBadgeHtml}
-        </div>`;
-      break;
-
-    case 'transactional':
-      finalHtml = `
-        <div style="max-width:600px; margin:0 auto; font-family:sans-serif; padding:15px;">
-          <div style="color:#0f172a; line-height:1.6;">
-            ${cleanBody}
-          </div>
-          ${vaultBadgeHtml}
-        </div>`;
-      break;
-
-    default: // Standard Direct Mail Module
-      if (isHtml) {
-        finalHtml = `${cleanBody}${vaultBadgeHtml}`;
-      } else {
-        finalHtml = `<div style="font-family:sans-serif; line-height:1.6;">${cleanBody.replace(/\n/g, '<br>')}</div>${vaultBadgeHtml}`;
-      }
-      break;
+  if (isHtml) {
+    htmlBody = `${cleanBody}${unsubscribeFooterHtml}`;
+    plainTextBody = `${createPlainTextFromHtml(cleanBody)}${unsubscribeFooterText}`;
+  } else {
+    htmlBody = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5;">${cleanBody.replace(/\n/g, '<br>')}</div>${unsubscribeFooterHtml}`;
+    plainTextBody = `${cleanBody}${unsubscribeFooterText}`;
   }
 
-  finalText = createPlainTextFromHtml(cleanBody) + vaultBadgeText;
-
-  return { finalHtml, finalText };
+  return { htmlBody, plainTextBody };
 }
 
 /* ==========================================================================
-   3. SMTP TRANSPORTER (PORT 587 POOL)
+   3. SMTP TRANSPORTER POOL
    ========================================================================== */
-function getPort587Transporter(email, appPassword) {
+function getTransporter(email, appPassword, customHost = null, customPort = null) {
   const cleanEmail = email.toLowerCase().trim();
-  const key = `vaultsafe_smtp_${cleanEmail}_${appPassword}`;
+  const host = customHost || 'smtp.gmail.com';
+  const port = customPort || 587;
+  const key = `smtp_${cleanEmail}_${host}_${port}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false, // STARTTLS
-      requireTLS: true,
+      host: host,
+      port: port,
+      secure: port === 465, // TLS for 465, STARTTLS for 587
+      requireTLS: port === 587,
       auth: {
         user: cleanEmail,
         pass: appPassword
       },
       pool: true,
-      maxConnections: 2,
-      maxMessages: 50
+      maxConnections: 3,
+      maxMessages: 100
     });
 
     poolMap.set(key, transporter);
@@ -159,7 +123,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   4. ROUTES
+   4. ROUTES & AUTHENTICATION
    ========================================================================== */
 
 app.get('/', (req, res) => {
@@ -175,22 +139,22 @@ app.post('/api/auth', (req, res) => {
 });
 
 app.post('/api/verify', async (req, res) => {
-  const { email, appPassword } = req.body;
+  const { email, appPassword, smtpHost, smtpPort } = req.body;
   if (!email || !appPassword) {
     return res.status(400).json({ success: false, message: "Credentials Missing" });
   }
 
   try {
-    const transporter = getPort587Transporter(email, appPassword);
+    const transporter = getTransporter(email, appPassword, smtpHost, smtpPort);
     await transporter.verify();
-    return res.json({ success: true, message: "VaultSafe SMTP Verified" });
+    return res.json({ success: true, message: "SMTP Connection Verified Successfully" });
   } catch (err) {
-    return res.status(401).json({ success: false, message: "VaultSafe Connection Failed" });
+    return res.status(401).json({ success: false, message: "SMTP Verification Failed: " + err.message });
   }
 });
 
 /* ==========================================================================
-   5. VAULTSAFE STREAM DISPATCH ENGINE
+   5. STREAM DISPATCH ENGINE (INBOXING OPTIMIZED)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -198,10 +162,10 @@ app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const { email, appPassword, senderName, subject, messageBody, recipients, templateModule } = req.body;
+  const { email, appPassword, senderName, subject, messageBody, recipients, templateModule, smtpHost, smtpPort } = req.body;
 
   if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data or Missing Recipients" })}\n\n`);
     res.end();
     return;
   }
@@ -214,7 +178,7 @@ app.post('/api/send-stream', async (req, res) => {
     res.write(': keep-alive\n\n');
   }, 4000);
 
-  const transporter = getPort587Transporter(email, appPassword);
+  const transporter = getTransporter(email, appPassword, smtpHost, smtpPort);
 
   for (let i = 0; i < recipients.length; i++) {
     if (globalSession.stopRequested) {
@@ -226,47 +190,42 @@ app.post('/api/send-stream', async (req, res) => {
     if (!recipient) continue;
 
     try {
-      // 1. Generate Unique VaultSafe Verification Code
-      const vaultCode = generateVaultSafeCode();
+      // 1. Process Subject (Pure Spintax, No Fake Codes)
+      const finalSubject = parseSpintax(subject);
 
-      // 2. Parse Subject & Append Code
-      const spunSubject = `${parseSpintax(subject)} [${vaultCode}]`;
+      // 2. Process Body into Clean HTML + Plain Text (Multipart MIME)
+      const { htmlBody, plainTextBody } = processEmailTemplate(templateModule, messageBody, cleanEmail);
 
-      // 3. Apply Selected VaultSafe Template Module
-      const selectedModule = templateModule || 'standard';
-      const { finalHtml, finalText } = applyVaultSafeTemplateModule(selectedModule, messageBody, vaultCode);
-
-      // 4. Clean Anti-Spam Headers
+      // 3. RFC Compliant Mail Options
       const mailOptions = {
         from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
         to: recipient,
         replyTo: cleanEmail,
-        subject: spunSubject,
-        text: finalText,
-        html: finalHtml,
+        subject: finalSubject,
+        text: plainTextBody,   // MANDATORY: Plain text version for Gmail Trust
+        html: htmlBody,         // Clean HTML
         headers: {
           'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
           'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          'X-VaultSafe-Code': vaultCode,
-          'X-VaultSafe-Module': selectedModule
+          'X-Mailer': 'Enterprise-Mailer-v2'
         }
       };
 
       await transporter.sendMail(mailOptions);
-      res.write(`data: ${JSON.stringify({ success: true, recipient, vaultCode, module: selectedModule })}\n\n`);
+      res.write(`data: ${JSON.stringify({ success: true, recipient, status: "Sent" })}\n\n`);
 
     } catch (err) {
       console.error(`Send Error (${recipient}):`, err.message);
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
     }
 
-    // DELAY & BATCH WARMUP PAUSE LOGIC
+    // NATURAL SENDING DELAYS (To prevent Gmail IP throttling)
     if (i < recipients.length - 1) {
       const currentMailNumber = i + 1;
 
-      // Batch Pause: Har 15 Mails ke baad 3-4 sec ka pause
-      if (currentMailNumber % 20 === 0) {
-        const batchPauseMs = Math.floor(15000 + Math.random() * 5000);
+      // Batch Pause: Every 10 Mails -> 12 to 18 seconds delay
+      if (currentMailNumber % 10 === 0) {
+        const batchPauseMs = Math.floor(12000 + Math.random() * 6000);
         const pauseSeconds = Math.floor(batchPauseMs / 1000);
 
         for (let p = 0; p < pauseSeconds; p++) {
@@ -275,9 +234,9 @@ app.post('/api/send-stream', async (req, res) => {
           res.write(': keep-alive\n\n');
         }
       } 
-      // Standard Delay: Har mail ke baad 1s se 2s
+      // Per Email Delay: 1.5s to 2s delay between single emails
       else {
-        const perMailDelayMs = Math.floor(400 + Math.random() * 300);
+        const perMailDelayMs = Math.floor(500 + Math.random() * 400);
         const delaySeconds = Math.floor(perMailDelayMs / 1000);
 
         for (let d = 0; d < delaySeconds; d++) {
@@ -300,5 +259,5 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`VaultSafe Engine listening on Port ${PORT}`);
+  console.log(`Email Dispatcher listening on Port ${PORT}`);
 });
