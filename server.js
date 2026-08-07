@@ -12,9 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 
-// Global Session & Transporter Pool
 const globalSession = { stopRequested: false };
-const poolMap = new Map();
 
 // Middlewares
 app.use(cors());
@@ -42,7 +40,7 @@ function parseSpintax(text) {
   return spun;
 }
 
-// Convert HTML to Clean Plain Text (Crucial for MIME Compliance & Inboxing)
+// Convert HTML to Clean Plain Text (Crucial for Multipart MIME)
 function createPlainTextFromHtml(html) {
   if (!html) return "";
   return html
@@ -61,69 +59,27 @@ function createPlainTextFromHtml(html) {
 }
 
 /* ==========================================================================
-   2. CLEAN TEMPLATE ENGINE (No Fake Badges / Spam Triggers)
+   2. DYNAMIC TRANSPORTER (Supports Gmail, SES, Mailgun, Custom SMTP)
    ========================================================================== */
-function processEmailTemplate(templateType, rawBodyContent, cleanEmail) {
-  const cleanBody = parseSpintax(rawBodyContent);
-  const isHtml = /<[a-z][\s\S]*>/i.test(cleanBody);
+function createSmtpTransporter(smtpConfig) {
+  const { host, port, user, pass } = smtpConfig;
 
-  let htmlBody = "";
-  let plainTextBody = "";
-
-  // Standard Compliant Footer (Professional & Clean)
-  const unsubscribeFooterHtml = `
-    <br><br>
-    <div style="border-top: 1px solid #eeeeee; padding-top: 12px; margin-top: 20px; font-family: Arial, sans-serif; font-size: 11px; color: #888888;">
-      This message was sent to you as part of our communication. 
-      If you wish to stop receiving these emails, please reply with "UNSUBSCRIBE".
-    </div>
-  `;
-
-  const unsubscribeFooterText = `\n\n---\nTo unsubscribe from future emails, please reply with "UNSUBSCRIBE".`;
-
-  if (isHtml) {
-    htmlBody = `${cleanBody}${unsubscribeFooterHtml}`;
-    plainTextBody = `${createPlainTextFromHtml(cleanBody)}${unsubscribeFooterText}`;
-  } else {
-    htmlBody = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.5;">${cleanBody.replace(/\n/g, '<br>')}</div>${unsubscribeFooterHtml}`;
-    plainTextBody = `${cleanBody}${unsubscribeFooterText}`;
-  }
-
-  return { htmlBody, plainTextBody };
+  return nodemailer.createTransport({
+    host: host || 'smtp.gmail.com',
+    port: parseInt(port) || 587,
+    secure: parseInt(port) === 465, // True for 465, False for 587
+    auth: { user, pass },
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
+    tls: {
+      rejectUnauthorized: true
+    }
+  });
 }
 
 /* ==========================================================================
-   3. SMTP TRANSPORTER POOL
-   ========================================================================== */
-function getTransporter(email, appPassword, customHost = null, customPort = null) {
-  const cleanEmail = email.toLowerCase().trim();
-  const host = customHost || 'smtp.gmail.com';
-  const port = customPort || 587;
-  const key = `smtp_${cleanEmail}_${host}_${port}`;
-
-  if (!poolMap.has(key)) {
-    const transporter = nodemailer.createTransport({
-      host: host,
-      port: port,
-      secure: port === 465, // TLS for 465, STARTTLS for 587
-      requireTLS: port === 587,
-      auth: {
-        user: cleanEmail,
-        pass: appPassword
-      },
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100
-    });
-
-    poolMap.set(key, transporter);
-  }
-
-  return poolMap.get(key);
-}
-
-/* ==========================================================================
-   4. ROUTES & AUTHENTICATION
+   3. ROUTES & SSE DISPATCH ENGINE
    ========================================================================== */
 
 app.get('/', (req, res) => {
@@ -139,33 +95,30 @@ app.post('/api/auth', (req, res) => {
 });
 
 app.post('/api/verify', async (req, res) => {
-  const { email, appPassword, smtpHost, smtpPort } = req.body;
-  if (!email || !appPassword) {
+  const { host, port, user, pass } = req.body;
+  if (!user || !pass) {
     return res.status(400).json({ success: false, message: "Credentials Missing" });
   }
 
   try {
-    const transporter = getTransporter(email, appPassword, smtpHost, smtpPort);
+    const transporter = createSmtpTransporter({ host, port, user, pass });
     await transporter.verify();
     return res.json({ success: true, message: "SMTP Connection Verified Successfully" });
   } catch (err) {
-    return res.status(401).json({ success: false, message: "SMTP Verification Failed: " + err.message });
+    return res.status(401).json({ success: false, message: `SMTP Failed: ${err.message}` });
   }
 });
 
-/* ==========================================================================
-   5. STREAM DISPATCH ENGINE (INBOXING OPTIMIZED)
-   ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const { email, appPassword, senderName, subject, messageBody, recipients, templateModule, smtpHost, smtpPort } = req.body;
+  const { smtpHost, smtpPort, email, appPassword, senderName, subject, messageBody, recipients } = req.body;
 
   if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data or Missing Recipients" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Request Payload" })}\n\n`);
     res.end();
     return;
   }
@@ -178,11 +131,16 @@ app.post('/api/send-stream', async (req, res) => {
     res.write(': keep-alive\n\n');
   }, 4000);
 
-  const transporter = getTransporter(email, appPassword, smtpHost, smtpPort);
+  const transporter = createSmtpTransporter({
+    host: smtpHost,
+    port: smtpPort,
+    user: cleanEmail,
+    pass: appPassword
+  });
 
   for (let i = 0; i < recipients.length; i++) {
     if (globalSession.stopRequested) {
-      res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ success: false, error: "Process Stopped by User" })}\n\n`);
       break;
     }
 
@@ -190,60 +148,41 @@ app.post('/api/send-stream', async (req, res) => {
     if (!recipient) continue;
 
     try {
-      // 1. Process Subject (Pure Spintax, No Fake Codes)
-      const finalSubject = parseSpintax(subject);
+      const spunSubject = parseSpintax(subject);
+      const spunBody = parseSpintax(messageBody);
+      const plainTextBody = createPlainTextFromHtml(spunBody);
 
-      // 2. Process Body into Clean HTML + Plain Text (Multipart MIME)
-      const { htmlBody, plainTextBody } = processEmailTemplate(templateModule, messageBody, cleanEmail);
-
-      // 3. RFC Compliant Mail Options
+      // Clean RFC-Compliant Mail Structure
       const mailOptions = {
         from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
         to: recipient,
         replyTo: cleanEmail,
-        subject: finalSubject,
-        text: plainTextBody,   // MANDATORY: Plain text version for Gmail Trust
-        html: htmlBody,         // Clean HTML
+        subject: spunSubject,
+        text: plainTextBody,       // Essential Plain-Text Version
+        html: spunBody,            // HTML Version
         headers: {
           'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          'X-Mailer': 'Enterprise-Mailer-v2'
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
         }
       };
 
       await transporter.sendMail(mailOptions);
-      res.write(`data: ${JSON.stringify({ success: true, recipient, status: "Sent" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ success: true, recipient })}\n\n`);
 
     } catch (err) {
       console.error(`Send Error (${recipient}):`, err.message);
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
     }
 
-    // NATURAL SENDING DELAYS (To prevent Gmail IP throttling)
+    // Natural Delay Between Emails (Anti-Throttling)
     if (i < recipients.length - 1) {
-      const currentMailNumber = i + 1;
+      const delayMs = Math.floor(5000 + Math.random() * 5000); // 5-10 sec random delay
+      const delaySec = Math.floor(delayMs / 1000);
 
-      // Batch Pause: Every 10 Mails -> 12 to 18 seconds delay
-      if (currentMailNumber % 10 === 0) {
-        const batchPauseMs = Math.floor(12000 + Math.random() * 6000);
-        const pauseSeconds = Math.floor(batchPauseMs / 1000);
-
-        for (let p = 0; p < pauseSeconds; p++) {
-          if (globalSession.stopRequested) break;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          res.write(': keep-alive\n\n');
-        }
-      } 
-      // Per Email Delay: 1.5s to 2s delay between single emails
-      else {
-        const perMailDelayMs = Math.floor(500 + Math.random() * 400);
-        const delaySeconds = Math.floor(perMailDelayMs / 1000);
-
-        for (let d = 0; d < delaySeconds; d++) {
-          if (globalSession.stopRequested) break;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          res.write(': keep-alive\n\n');
-        }
+      for (let d = 0; d < delaySec; d++) {
+        if (globalSession.stopRequested) break;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        res.write(': keep-alive\n\n');
       }
     }
   }
@@ -255,9 +194,9 @@ app.post('/api/send-stream', async (req, res) => {
 
 app.post('/api/stop', (req, res) => {
   globalSession.stopRequested = true;
-  res.json({ success: true, message: "Process stopped successfully" });
+  res.json({ success: true, message: "Dispatch stopped successfully" });
 });
 
 app.listen(PORT, () => {
-  console.log(`Email Dispatcher listening on Port ${PORT}`);
+  console.log(`Clean Mailer Server running on Port ${PORT}`);
 });
