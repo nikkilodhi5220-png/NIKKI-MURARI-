@@ -22,7 +22,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. SECURE PORT 587 ENGINE (Clean TLS Handshake)
+   1. PORT 587 ENGINE (Clean Modern TLS Handshake)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -32,14 +32,14 @@ function getPort587Transporter(email, appPassword) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
-      secure: false,     // Port 587 uses STARTTLS
-      requireTLS: true,  // Modern TLS Handshake
+      secure: false,        // Standard STARTTLS on Port 587
+      requireTLS: true,     // Force Secure Connection
       auth: {
         user: cleanEmail,
         pass: appPassword
       },
       pool: true,
-      maxConnections: 2, // Stable velocity for Gmail
+      maxConnections: 2,    // Stable Connection Pool
       maxMessages: 100
     });
 
@@ -50,7 +50,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   2. SPINTAX & MIME UTILITIES
+   2. SPINTAX & CONTENT UTILITIES
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -117,7 +117,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   4. STREAMING DISPATCH ENGINE (Exact 2-Second Sending Delay)
+   4. STREAMING DISPATCH ENGINE (Speed: Exactly 1.0 Second Per Mail)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -139,7 +139,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const keepAlivePing = setInterval(() => {
     res.write(': keep-alive\n\n');
-  }, 8000);
+  }, 5000);
 
   const transporter = getPort587Transporter(email, appPassword);
 
@@ -181,13 +181,13 @@ app.post('/api/send-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: true, recipient, status: "Sent" })}\n\n`);
 
     } catch (err) {
-      console.error(`Send Failure to ${recipient}:`, err.message);
+      console.error(`Port 587 Send Failure to ${recipient}:`, err.message);
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
     }
 
-    // EXACT 2-SECOND DELAY ENGINE (~1950ms - 2050ms natural human jitter)
+    // SPEED ENGINE: 1 SECOND DELAY (950ms - 1050ms Natural Jitter)
     if (i < recipients.length - 1) {
-      const targetDelay = Math.floor(1950 + Math.random() * 100);
+      const targetDelay = Math.floor(950 + Math.random() * 100);
       
       const delaySeconds = Math.floor(targetDelay / 1000);
       for (let s = 0; s < delaySeconds; s++) {
@@ -213,5 +213,5 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server listening on Port ${PORT} with exact 2-second rate engine`);
+  console.log(`Server listening on Port ${PORT} with 1-Second Dispatch Engine`);
 });
