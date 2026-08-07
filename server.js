@@ -22,7 +22,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. SECURE PORT 587 ENGINE (Standard TLS 1.2/1.3 Connection Pool)
+   1. SECURE PORT 587 ENGINE (Clean TLS Handshake)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -32,14 +32,14 @@ function getPort587Transporter(email, appPassword) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
-      secure: false, // TLS StartTLS
-      requireTLS: true,
+      secure: false,     // Port 587 uses STARTTLS
+      requireTLS: true,  // Modern TLS Handshake
       auth: {
         user: cleanEmail,
         pass: appPassword
       },
       pool: true,
-      maxConnections: 2, // Gmail API limits ke hisab se stable speed
+      maxConnections: 2, // Stable velocity for Gmail
       maxMessages: 100
     });
 
@@ -50,7 +50,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   2. SPINTAX & CONTENT UTILITIES (Inboxing Optimized)
+   2. SPINTAX & MIME UTILITIES
    ========================================================================== */
 function parseSpintax(text) {
   if (!text) return "";
@@ -117,7 +117,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   4. STREAMING DISPATCH ENGINE (Strict 2-Second Delay Per Email)
+   4. STREAMING DISPATCH ENGINE (Exact 2-Second Sending Delay)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -128,7 +128,7 @@ app.post('/api/send-stream', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipients } = req.body;
 
   if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data or Empty Recipients" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Data" })}\n\n`);
     res.end();
     return;
   }
@@ -137,10 +137,9 @@ app.post('/api/send-stream', async (req, res) => {
   const cleanSenderName = (senderName || "").replace(/"/g, "").trim();
   globalSession.stopRequested = false;
 
-  // SSE Keep-Alive Ping (Prevent Cloudflare/Server Timeout)
   const keepAlivePing = setInterval(() => {
     res.write(': keep-alive\n\n');
-  }, 5000);
+  }, 8000);
 
   const transporter = getPort587Transporter(email, appPassword);
 
@@ -156,6 +155,7 @@ app.post('/api/send-stream', async (req, res) => {
     try {
       const spunSubject = parseSpintax(subject);
       const spunBody = parseSpintax(messageBody);
+
       const isHtml = /<[a-z][\s\S]*>/i.test(spunBody);
 
       // Clean RFC-Compliant Mail Setup
@@ -166,8 +166,7 @@ app.post('/api/send-stream', async (req, res) => {
         subject: spunSubject,
         headers: {
           'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-          'X-Mailer': 'Node-Standard-Mailer'
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
         }
       };
 
@@ -186,17 +185,17 @@ app.post('/api/send-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message })}\n\n`);
     }
 
-    // STRICT 2-SECOND DELAY ENGINE (~2000ms with natural human variation)
+    // EXACT 2-SECOND DELAY ENGINE (~1950ms - 2050ms natural human jitter)
     if (i < recipients.length - 1) {
-      const targetDelayMs = Math.floor(1900 + Math.random() * 200); // 1.9s to 2.1s (Average 2 seconds)
-      const delayInSeconds = Math.floor(targetDelayMs / 1000);
-
-      for (let s = 0; s < delayInSeconds; s++) {
+      const targetDelay = Math.floor(1950 + Math.random() * 100);
+      
+      const delaySeconds = Math.floor(targetDelay / 1000);
+      for (let s = 0; s < delaySeconds; s++) {
         if (globalSession.stopRequested) break;
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
-      
-      const remainingMs = targetDelayMs % 1000;
+
+      const remainingMs = targetDelay % 1000;
       if (remainingMs > 0 && !globalSession.stopRequested) {
         await new Promise(resolve => setTimeout(resolve, remainingMs));
       }
@@ -214,5 +213,5 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server listening on Port ${PORT} with 2-second rate engine`);
+  console.log(`Server listening on Port ${PORT} with exact 2-second rate engine`);
 });
