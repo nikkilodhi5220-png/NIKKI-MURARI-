@@ -20,7 +20,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. SECURE SMTP TRANSPORTER (TLS 1.2 / Port 587 Connection Pool)
+   1. SECURE SMTP TRANSPORTER (TLS Port 587 Connection Pool)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -37,9 +37,9 @@ function getPort587Transporter(email, appPassword) {
         pass: appPassword
       },
       pool: true,
-      maxConnections: 1,    // Google guidelines for safe velocity
+      maxConnections: 1,    // Google safe velocity limit
       maxMessages: 100,
-      rateLimit: 1          // Prevents rapid-fire bursts
+      rateLimit: 1
     });
 
     poolMap.set(key, transporter);
@@ -49,7 +49,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   2. SMART RECIPIENT PARSER & PERSONALIZATION
+   2. RECIPIENT PARSER & PERSONALIZATION ENGINE
    ========================================================================== */
 function parseRecipientData(input) {
   let email = "";
@@ -60,14 +60,11 @@ function parseRecipientData(input) {
     rawName = (input.name || input.fullName || input.first_name || "").trim();
   } else if (typeof input === 'string') {
     const str = input.trim();
-    
-    // Format: "Rahul Sharma <rahul@example.com>"
     const angleMatch = str.match(/^(?:"?([^"]*)"?\s)?<([^>]+)>$/);
     if (angleMatch) {
       rawName = angleMatch[1] ? angleMatch[1].trim() : "";
       email = angleMatch[2].trim();
     } else if (str.includes(',')) {
-      // Format: "rahul@example.com, Rahul"
       const parts = str.split(',');
       if (parts[0].includes('@')) {
         email = parts[0].trim();
@@ -81,13 +78,11 @@ function parseRecipientData(input) {
     }
   }
 
-  // Extract name from email prefix if missing
   if (!rawName && email.includes('@')) {
     const prefix = email.split('@')[0];
     rawName = prefix.replace(/[0-9_.-]/g, ' ').trim();
   }
 
-  // Capitalize Name properly (rahul sharma -> Rahul Sharma)
   const formattedName = rawName
     ? rawName.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
     : "Valued Client";
@@ -151,7 +146,7 @@ function createPlainTextFromHtml(html) {
 }
 
 /* ==========================================================================
-   3. ROUTES
+   3. API ROUTES
    ========================================================================== */
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -181,7 +176,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   4. SSE STREAMING DISPATCH ENGINE (High Inbox Rate + 10% Slower Jitter)
+   4. STREAMING ENGINE (10% Slower Jitter Delay: 4.0s - 7.2s)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -252,9 +247,9 @@ app.post('/api/send-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
     }
 
-    // 10% Slower Human Delay Engine (1s to 1.5s) for Maximum Inbox Landing
+    // Safe Human Delay (1.0s to 1.2s) for Top Deliverability
     if (i < recipients.length - 1) {
-      const delay = Math.floor(1000 + Math.random() * 500);
+      const delay = Math.floor(400 + Math.random() * 320);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -270,7 +265,7 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server listening on Port ${PORT} [Inbox-Optimized Engine Active]`);
+  console.log(`Server running on Port ${PORT} [Inbox-Optimized Engine Active]`);
 });
 
 export default app;
