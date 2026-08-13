@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
 
-    // ==================== AUTHENTICATION & UI ====================
+    // Auth Elements
     const passwordGate = document.getElementById('password-gate');
     const mainApp = document.getElementById('main-app');
     const gateForm = document.getElementById('gate-form');
@@ -70,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // ==================== MAIN CONSOLE & LIVE MONITOR ====================
+    // Dashboard Elements
     const dashboardEmail = document.getElementById('dashboard-email');
     const dashboardPassword = document.getElementById('dashboard-password');
     const togglePasswordBtn = document.getElementById('toggle-password');
@@ -135,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (progressBar) progressBar.style.width = '0%';
 
         if (statusIcon) statusIcon.className = 'fa-solid fa-circle-notch fa-spin text-primary';
-        if (statusText) statusText.textContent = 'Sending emails with human-jitter timing...';
+        if (statusText) statusText.textContent = 'Dispatching emails with safe human delay...';
 
         sendBtn?.classList.add('hidden');
         stopBtn?.classList.remove('hidden');
@@ -162,7 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
         stopBtn?.classList.add('hidden');
         if (sendBtn) {
             sendBtn.disabled = false;
-            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send All';
+            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Launch Campaign';
         }
     }
 
@@ -260,11 +260,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 isSending = false;
                 if (stopRequested) {
-                    if (statusIcon) statusIcon.className = 'fa-solid fa-circle-stop text-danger';
+                    if (statusIcon) statusIcon.className = 'fa-solid fa-circle-stop text-rose-500';
                     if (statusText) statusText.textContent = 'Process stopped by user.';
                 } else {
-                    if (statusIcon) statusIcon.className = 'fa-solid fa-circle-check text-success';
-                    if (statusText) statusText.textContent = 'Campaign Completed!';
+                    if (statusIcon) statusIcon.className = 'fa-solid fa-circle-check text-emerald-400';
+                    if (statusText) statusText.textContent = 'Campaign Completed Successfully!';
                     alert(`Campaign Completed!\nSent: ${sentCount}\nFailed: ${failedCount}`);
                 }
 
@@ -281,7 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (stopBtn) {
         stopBtn.addEventListener('click', async () => {
             stopRequested = true;
-            if (statusIcon) statusIcon.className = 'fa-solid fa-spinner fa-spin text-warning';
+            if (statusIcon) statusIcon.className = 'fa-solid fa-spinner fa-spin text-amber-400';
             if (statusText) statusText.textContent = 'Stopping process...';
             stopBtn.disabled = true;
 
