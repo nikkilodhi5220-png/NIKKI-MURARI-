@@ -20,7 +20,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. SECURE SMTP TRANSPORTER (TLS Port 587 - High Deliverability)
+   1. SECURE SMTP TRANSPORTER (TLS Port 587 - High Deliverability Pool)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -37,9 +37,8 @@ function getPort587Transporter(email, appPassword) {
         pass: appPassword
       },
       pool: true,
-      maxConnections: 1,     // Safe velocity limit for Gmail
-      maxMessages: 100,
-      rateLimit: 1
+      maxConnections: 1,     // Safe connection limit for Gmail
+      maxMessages: 100
     });
 
     poolMap.set(key, transporter);
@@ -49,7 +48,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   2. RECIPIENT PARSER, SPINTAX & PERSONALIZATION
+   2. RECIPIENT PARSER, SPINTAX & PERSONALIZATION ENGINE
    ========================================================================== */
 function parseRecipientData(input) {
   let email = "";
@@ -98,7 +97,7 @@ function parseRecipientData(input) {
   };
 }
 
-// Dynamic Content Variation (Spam Filters se bachne ke liye sabse zaroori)
+// Spintax Parsing for Natural Dynamic Content ({Hello|Hi|Hey})
 function parseSpintax(text) {
   if (!text) return "";
   let spun = text;
@@ -129,7 +128,7 @@ function personalizeContent(template, recipient) {
   return content;
 }
 
-// HTML to Plain-Text Fallback Generator (Ratio Maintain karta hai)
+// Automatic Plain Text Fallback Generator (Maintains High Spam-Score Balance)
 function createPlainTextFromHtml(html) {
   if (!html) return "";
   return html
@@ -178,7 +177,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   4. STREAMING ENGINE (Super Safe Delay & High Inbox Rate)
+   4. STREAMING ENGINE (High Deliverability + Safe Human-Speed Delay)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -223,7 +222,6 @@ app.post('/api/send-stream', async (req, res) => {
         to: recipient.name !== "Valued Client" ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
         replyTo: cleanEmail,
         subject: personalizedSubject,
-        // Unsubscribe header Google/Yahoo deliverability guidelines ke mutabiq hai
         headers: {
           'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
           'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
@@ -245,9 +243,9 @@ app.post('/api/send-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
     }
 
-    // Dynamic Human-Like Delay (1.0s to 1.2s) - Direct Inbox Landing ke liye
+    // Safe Human-Like Delay (1.5s to 2.0s) - Direct Inbox Landing Optimisation
     if (i < recipients.length - 1) {
-      const delay = Math.floor(400 + Math.random() * 320); // 4000ms - 7200ms
+      const delay = Math.floor(450 + Math.random() * 300); // 4500ms - 8000ms
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
