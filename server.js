@@ -13,46 +13,38 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 
-const globalSession = { stopRequested: false };
-const poolMap = new Map();
+// In-memory active flag (Works for single instance & local execution)
+let activeStopSignal = false;
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. SECURE GMAIL SMTP TRANSPORTER (Pool Connections for Batches)
+   1. TRANSPORTER FACTORY
    ========================================================================== */
-function getPort587Transporter(email, appPassword) {
+function createTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  const key = `port587_${cleanEmail}_${appPassword}`;
-
-  if (!poolMap.has(key)) {
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false,         // Uses STARTTLS
-      requireTLS: true,
-      auth: {
-        user: cleanEmail,
-        pass: appPassword
-      },
-      pool: true,
-      maxConnections: 6,     // Allowed concurrent connections for 6-batch sending
-      maxMessages: 100
-    });
-
-    poolMap.set(key, transporter);
-  }
-
-  return poolMap.get(key);
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // TLS via STARTTLS
+    requireTLS: true,
+    auth: {
+      user: cleanEmail,
+      pass: appPassword
+    },
+    pool: true,
+    maxConnections: 6,
+    maxMessages: 100,
+    rateDelta: 1000,
+    rateLimit: 5
+  });
 }
 
 /* ==========================================================================
-   2. RECIPIENT PARSER, SPINTAX & REF-CODE ENGINE
+   2. RECIPIENT PARSER, SPINTAX & INBOX UTILS
    ========================================================================== */
-
-// Unique Server-Side Reference Code per mail (e.g. "[Ref: e8b9f1a2]")
 function generateReferenceCode() {
   const randomHex = crypto.randomBytes(4).toString('hex');
   return `[Ref: ${randomHex}]`;
@@ -105,7 +97,6 @@ function parseRecipientData(input) {
   };
 }
 
-// Spintax Parsing ({Hi|Hello|Hey})
 function parseSpintax(text) {
   if (!text) return "";
   let spun = text;
@@ -136,7 +127,6 @@ function personalizeContent(template, recipient) {
   return content;
 }
 
-// Auto Plain-Text Fallback
 function createPlainTextFromHtml(html) {
   if (!html) return "";
   return html
@@ -175,17 +165,20 @@ app.post("/api/verify", async (req, res) => {
     return res.status(400).json({ success: false, message: "Credentials required" });
   }
 
+  const transporter = createTransporter(email, appPassword);
+
   try {
-    const transporter = getPort587Transporter(email, appPassword);
     await transporter.verify();
+    transporter.close();
     return res.json({ success: true, message: "SMTP verified successfully" });
   } catch (error) {
+    transporter.close();
     return res.status(401).json({ success: false, message: "SMTP Auth Failed. Verify App Password." });
   }
 });
 
 /* ==========================================================================
-   4. BATCH STREAMING ENGINE (6 Emails per Batch / Burst)
+   4. SSE STREAMING ENGINE
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -203,25 +196,31 @@ app.post('/api/send-stream', async (req, res) => {
 
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || "").replace(/"/g, "").trim();
-  globalSession.stopRequested = false;
+  
+  let clientDisconnected = false;
+  activeStopSignal = false;
+
+  req.on('close', () => {
+    clientDisconnected = true;
+  });
 
   const keepAlivePing = setInterval(() => {
-    res.write(': keep-alive\n\n');
-  }, 4000);
+    if (!clientDisconnected) {
+      res.write(': keep-alive\n\n');
+    }
+  }, 3000);
 
-  const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 6; // Ek saath 6 email send karne ke liye
+  const transporter = createTransporter(cleanEmail, appPassword);
+  const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-    if (globalSession.stopRequested) {
+    if (clientDisconnected || activeStopSignal) {
       res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
       break;
     }
 
-    // 6 Recipients ka Sub-Array / Batch
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    // 6-Emails ko Concurrent (Parallel) send karne ki tayari
     const sendPromises = batch.map(async (rawRecipient) => {
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) {
@@ -240,6 +239,9 @@ app.post('/api/send-stream', async (req, res) => {
           replyTo: cleanEmail,
           subject: personalizedSubject,
           headers: {
+            'X-Priority': '3',
+            'X-MSMail-Priority': 'Normal',
+            'Importance': 'Normal',
             'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
             'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
           }
@@ -257,40 +259,40 @@ app.post('/api/send-stream', async (req, res) => {
         return { success: true, recipient: recipient.email, name: recipient.name, ref: refCode };
 
       } catch (err) {
-        console.error(`Send Failure [${recipient.email}]:`, err.message);
         return { success: false, recipient: recipient.email, error: err.message };
       }
     });
 
-    // 6 Emails ek sath dispatch hote hain
     const results = await Promise.allSettled(sendPromises);
 
-    // SSE Frontend stream response for each mail in batch
     for (const resItem of results) {
-      if (resItem.status === 'fulfilled' && resItem.value.recipient) {
+      if (resItem.status === 'fulfilled' && resItem.value.recipient && !clientDisconnected) {
         res.write(`data: ${JSON.stringify(resItem.value)}\n\n`);
       }
     }
 
-    // Agle batch se pehle Safe Human Pause (3s - 6s) taaki Spam Filter trigger na ho
-    if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(300 + Math.random() * 600); // 300ms to 600ms
+    if (i + BATCH_SIZE < recipients.length && !clientDisconnected && !activeStopSignal) {
+      const batchDelay = Math.floor(1000 + Math.random() * 1000);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
 
   clearInterval(keepAlivePing);
-  res.write("data: [DONE]\n\n");
-  res.end();
+  transporter.close();
+
+  if (!clientDisconnected) {
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
 });
 
 app.post('/api/stop', (req, res) => {
-  globalSession.stopRequested = true;
-  res.json({ success: true, message: "Sending process stopped" });
+  activeStopSignal = true;
+  res.json({ success: true, message: "Sending process stop requested" });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on Port ${PORT} [6-Email Batch Engine Active]`);
+  console.log(`Server active on Port ${PORT}`);
 });
 
 export default app;
