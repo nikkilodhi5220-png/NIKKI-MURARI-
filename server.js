@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// HTML से स्पैम ट्रिगर्स हटाने और प्लेन टेक्स्ट तैयार करने का फ़ंक्शन
+// HTML से स्पैम ट्रिगर्स हटाने का फ़ंक्शन
 function stripHtml(html) {
     if (!html) return '';
     return html
@@ -19,6 +19,16 @@ function stripHtml(html) {
         .replace(/<[^>]+>/g, '')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+// हर टेम्पलेट को अलग बनाने के लिए रैंडम आईडी
+function generateUniqueId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 8; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
 }
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,7 +40,6 @@ app.post('/api/send-emails', async (req, res) => {
 
     const { smtp, senderName, subject, htmlBody, recipients } = req.body;
 
-    // अगर फ्रंटएंड से Host/Port न भी आए तो ऑटोमैटिक Gmail SMTP यूज़ होगा
     const smtpHost = (smtp && smtp.host && smtp.host.trim()) ? smtp.host.trim() : 'smtp.gmail.com';
     const smtpPort = (smtp && smtp.port && parseInt(smtp.port)) ? parseInt(smtp.port) : 465;
 
@@ -71,16 +80,22 @@ app.post('/api/send-emails', async (req, res) => {
         const recipient = recipients[i].trim();
         if (!recipient) continue;
 
-        const plainText = stripHtml(htmlBody);
+        // Vercel Connection Alive रखने के लिए Ping
+        res.write(': keep-alive\n\n');
+
+        const uniqueId = generateUniqueId();
+        const customHtmlBody = `${htmlBody}\n\n<div style="display:none;font-size:1px;color:#ffffff;">Ref ID: #${uniqueId}</div>`;
+        const plainText = `${stripHtml(htmlBody)}\n\n[Ref ID: #${uniqueId}]`;
 
         const mailOptions = {
             from: `"${senderName.trim()}" <${smtp.user.trim()}>`,
             to: recipient,
             subject: subject.trim(),
-            text: plainText,             // Plain-text Fallback (Primary Inbox के लिए अत्यंत महत्वपूर्ण)
-            html: htmlBody,
+            text: plainText,
+            html: customHtmlBody,
             headers: {
-                'X-Entity-Ref-ID': Date.now().toString() // प्रत्येक ईमेल को यूनिक बनाता है
+                'X-Entity-Ref-ID': `${Date.now()}-${uniqueId}`,
+                'Message-ID': `<${uniqueId}.${Date.now()}@gmail.com>`
             }
         };
 
@@ -110,7 +125,7 @@ app.post('/api/send-emails', async (req, res) => {
             })}\n\n`);
         }
 
-        // हर ईमेल के बाद 1 से 2 सेकंड का रैंडम गैप (Spam Filter bypass करने के लिए)
+        // Safe Inboxing Speed: 1 से 2 सेकंड का गैप
         if (i < recipients.length - 1) {
             const randomDelay = Math.floor(Math.random() * 500) + 700;
             await delay(randomDelay);
@@ -121,5 +136,11 @@ app.post('/api/send-emails', async (req, res) => {
     res.end();
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// Local Development Support
+if (process.env.NODE_ENV !== 'production') {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+}
+
+// Vercel Serverless Export
+module.exports = app;
