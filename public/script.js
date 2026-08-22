@@ -1,42 +1,4 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // 🔒 PASSCODE GATE SETTINGS
-    const APP_PASSCODE = "1234"; // अपना मनचाहा पासकोड यहाँ सेट करें
-    const gateModal = document.getElementById('password-gate');
-    const gateForm = document.getElementById('gate-form');
-    const gatePassInput = document.getElementById('gate-password');
-    const gateError = document.getElementById('gate-error');
-    const logoutBtn = document.getElementById('logout-btn');
-
-    if (sessionStorage.getItem('unlocked') === 'true') {
-        if (gateModal) gateModal.classList.add('hidden');
-    }
-
-    if (gateForm) {
-        gateForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            if (gatePassInput.value === APP_PASSCODE) {
-                sessionStorage.setItem('unlocked', 'true');
-                gateError.classList.add('hidden');
-                gateModal.classList.add('gate-unlocked');
-                setTimeout(() => {
-                    gateModal.classList.add('hidden');
-                    gateModal.classList.remove('gate-unlocked');
-                }, 500);
-            } else {
-                gateError.classList.remove('hidden');
-                gatePassInput.value = '';
-                gatePassInput.focus();
-            }
-        });
-    }
-
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', () => {
-            sessionStorage.removeItem('unlocked');
-            location.reload();
-        });
-    }
-
     // SHOW/HIDE PASSWORD
     const togglePassBtn = document.getElementById('toggle-pass');
     const smtpPassInput = document.getElementById('smtp-pass');
