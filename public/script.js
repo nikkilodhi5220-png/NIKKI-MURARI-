@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 logoutBtn.style.backgroundColor = "var(--danger-color)";
                 logoutBtn.style.color = "#ffffff";
 
-                // 3 सेकंड के अंदर दूसरा क्लिक न होने पर रीसेट हो जाएगा
                 logoutTimer = setTimeout(() => {
                     logoutClicks = 0;
                     if (logoutText) logoutText.textContent = "लॉग आउट";
@@ -46,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // LIVE RECIPIENT COUNT
+    // RECIPIENT COUNT
     const recipientsInput = document.getElementById('recipients-input');
     const recipientCountBadge = document.getElementById('recipient-count');
 
@@ -60,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // EMAIL SUBMIT & STREAMING
+    // FORM SUBMIT
     const emailForm = document.getElementById('email-form');
     const sendBtn = document.getElementById('send-btn');
     const progressBar = document.getElementById('progress-bar');
