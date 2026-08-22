@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// HTML से टेक्स्ट निकालने वाला क्लीनर (Spam Protection)
+// HTML से स्पैम ट्रिगर्स हटाने और प्लेन टेक्स्ट तैयार करने का फ़ंक्शन
 function stripHtml(html) {
     if (!html) return '';
     return html
@@ -30,21 +30,22 @@ app.post('/api/send-emails', async (req, res) => {
 
     const { smtp, senderName, subject, htmlBody, recipients } = req.body;
 
-    if (!smtp || !smtp.host || !smtp.user || !smtp.pass || !recipients || recipients.length === 0) {
-        res.write(`data: ${JSON.stringify({ type: 'error', message: 'SMTP जानकारी या प्राप्तकर्ता सूची गायब है!' })}\n\n`);
+    // अगर फ्रंटएंड से Host/Port न भी आए तो ऑटोमैटिक Gmail SMTP यूज़ होगा
+    const smtpHost = (smtp && smtp.host && smtp.host.trim()) ? smtp.host.trim() : 'smtp.gmail.com';
+    const smtpPort = (smtp && smtp.port && parseInt(smtp.port)) ? parseInt(smtp.port) : 465;
+
+    if (!smtp || !smtp.user || !smtp.pass || !recipients || recipients.length === 0) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: 'Gmail ID या App Password दर्ज करना अनिवार्य है!' })}\n\n`);
         return res.end();
     }
 
-    const portNum = parseInt(smtp.port) || 465;
-
-    // Gmail & Custom SMTP Transport Configuration
     const transporter = nodemailer.createTransport({
-        host: smtp.host.trim(),
-        port: portNum,
-        secure: portNum === 465, // Port 465 के लिए Secure true
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465,
         auth: {
             user: smtp.user.trim(),
-            pass: smtp.pass.trim().replace(/\s+/g, '') // App Password के स्पेस खुद हटा देगा
+            pass: smtp.pass.trim().replace(/\s+/g, '') // पासवर्ड के स्पेस स्वतः हटाएँ
         },
         tls: {
             rejectUnauthorized: false
@@ -55,7 +56,7 @@ app.post('/api/send-emails', async (req, res) => {
     try {
         await transporter.verify();
     } catch (err) {
-        res.write(`data: ${JSON.stringify({ type: 'error', message: `Gmail/SMTP प्रमाणीकरण विफल: ${err.message}` })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'error', message: `Gmail/SMTP कनेक्शन त्रुटि: ${err.message}` })}\n\n`);
         return res.end();
     }
 
@@ -65,7 +66,7 @@ app.post('/api/send-emails', async (req, res) => {
 
     res.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
 
-    // 🔴 EXACT 1 EMAIL PER LOOP WITH Anti-Spam Delays
+    // 🔴 Anti-Spam Direct Inboxing Loop (1-By-1)
     for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i].trim();
         if (!recipient) continue;
@@ -75,9 +76,12 @@ app.post('/api/send-emails', async (req, res) => {
         const mailOptions = {
             from: `"${senderName.trim()}" <${smtp.user.trim()}>`,
             to: recipient,
-            subject: subject,
-            text: plainText,
-            html: htmlBody
+            subject: subject.trim(),
+            text: plainText,             // Plain-text Fallback (Primary Inbox के लिए अत्यंत महत्वपूर्ण)
+            html: htmlBody,
+            headers: {
+                'X-Entity-Ref-ID': Date.now().toString() // प्रत्येक ईमेल को यूनिक बनाता है
+            }
         };
 
         try {
@@ -106,9 +110,9 @@ app.post('/api/send-emails', async (req, res) => {
             })}\n\n`);
         }
 
-        // हर ईमेल के बीच 3 से 4 सेकंड का ह्यूमन डिले (Spam Prevention)
+        // हर ईमेल के बाद 3.5 से 5 सेकंड का रैंडम गैप (Spam Filter bypass करने के लिए)
         if (i < recipients.length - 1) {
-            const randomDelay = Math.floor(Math.random() * 1000) + 3000;
+            const randomDelay = Math.floor(Math.random() * 1500) + 3500;
             await delay(randomDelay);
         }
     }
