@@ -1,370 +1,307 @@
-:root {
-    --primary-color: #3b82f6;
-    --primary-hover: #2563eb;
-    --success-color: #10b981;
-    --success-hover: #059669;
-    --danger-color: #ef4444;
-    --danger-hover: #dc2626;
-    --bg-color: #f8fafc;
-    --card-bg: #ffffff;
-    --text-main: #0f172a;
-    --text-muted: #64748b;
-    --border-color: #e2e8f0;
-    --input-focus: rgba(59, 130, 246, 0.2);
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --font-family: 'Outfit', sans-serif;
-}
+document.addEventListener('DOMContentLoaded', () => {
 
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+    // ==================== PASSWORD GATE & LOGOUT ====================
+    const passwordGate = document.getElementById('password-gate');
+    const mainApp = document.getElementById('main-app');
+    const gateForm = document.getElementById('gate-form');
+    const gatePassword = document.getElementById('gate-password');
+    const gateError = document.getElementById('gate-error');
+    const gateSubmitBtn = document.getElementById('gate-submit-btn');
+    const toggleGatePassword = document.getElementById('toggle-gate-password');
+    const logoutBtn = document.getElementById('logout-btn');
 
-body {
-    font-family: var(--font-family);
-    background-color: var(--bg-color);
-    color: var(--text-main);
-    line-height: 1.5;
-    background-image: radial-gradient(circle at top right, #e0e7ff, transparent 30%), radial-gradient(circle at bottom left, #dbeafe, transparent 30%);
-    min-height: 100vh;
-}
+    if (sessionStorage.getItem('authenticated') === 'true') {
+        passwordGate.classList.add('hidden');
+        mainApp.classList.remove('hidden');
+    } else {
+        passwordGate.classList.remove('hidden');
+        mainApp.classList.add('hidden');
+    }
 
-.app-container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 2rem 1rem;
-}
+    toggleGatePassword.addEventListener('click', () => {
+        const type = gatePassword.getAttribute('type') === 'password' ? 'text' : 'password';
+        gatePassword.setAttribute('type', type);
+        toggleGatePassword.innerHTML = type === 'password' ? '<i class="fa-regular fa-eye"></i>' : '<i class="fa-regular fa-eye-slash"></i>';
+    });
 
-.app-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-    position: relative;
-}
+    gateForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const password = gatePassword.value.trim();
+        if (!password) return;
 
-.app-header h1 {
-    font-size: 2.2rem;
-    font-weight: 700;
-    color: var(--primary-color);
-    background: linear-gradient(135deg, var(--primary-color), #8b5cf6);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-}
+        gateSubmitBtn.disabled = true;
+        gateSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+        gateError.classList.add('hidden');
 
-.btn-logout {
-    padding: 0.45rem 0.9rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    border-radius: var(--radius-md);
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    color: var(--danger-color);
-    background-color: #fff;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    box-shadow: var(--shadow-sm);
-    user-select: none;
-}
+        try {
+            const response = await fetch('/api/auth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
 
-.btn-logout:hover {
-    background-color: var(--danger-color);
-    color: #fff;
-    box-shadow: var(--shadow-md);
-}
+            const result = await response.json();
 
-.btn-shake {
-    animation: shake 0.3s ease-in-out;
-}
+            if (result.success) {
+                sessionStorage.setItem('authenticated', 'true');
+                passwordGate.classList.add('gate-unlocked');
+                setTimeout(() => {
+                    passwordGate.classList.add('hidden');
+                    mainApp.classList.remove('hidden');
+                }, 550);
+            } else {
+                gateError.classList.remove('hidden');
+                gatePassword.value = '';
+                gatePassword.focus();
+            }
+        } catch (err) {
+            gateError.querySelector('span').textContent = 'Connection error. Try again.';
+            gateError.classList.remove('hidden');
+        } finally {
+            gateSubmitBtn.disabled = false;
+            gateSubmitBtn.innerHTML = '<i class="fa-solid fa-arrow-right-to-bracket"></i> Enter';
+        }
+    });
 
-@keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-4px); }
-    75% { transform: translateX(4px); }
-}
+    // Real Double-Click Logout Handler
+    if (logoutBtn) {
+        logoutBtn.addEventListener('dblclick', () => {
+            sessionStorage.removeItem('authenticated');
+            window.location.reload();
+        });
 
-.card {
-    background-color: var(--card-bg);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
-    padding: 2rem;
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    backdrop-filter: blur(10px);
-}
+        // Single click hint
+        let clickTimer;
+        logoutBtn.addEventListener('click', () => {
+            clearTimeout(clickTimer);
+            clickTimer = setTimeout(() => {
+                logoutBtn.classList.add('btn-shake');
+                setTimeout(() => logoutBtn.classList.remove('btn-shake'), 400);
+            }, 250);
+        });
+    }
 
-/* Forms */
-.form-group {
-    margin-bottom: 1.25rem;
-}
+    // ==================== MAIN DISPATCH ENGINE ====================
+    const dashboardEmail = document.getElementById('dashboard-email');
+    const dashboardPassword = document.getElementById('dashboard-password');
+    const togglePasswordBtn = document.getElementById('toggle-password');
 
-.form-group label {
-    display: block;
-    font-size: 0.9rem;
-    font-weight: 500;
-    margin-bottom: 0.5rem;
-    color: var(--text-main);
-}
+    const senderName = document.getElementById('sender-name');
+    const subject = document.getElementById('subject');
+    const messageBody = document.getElementById('message-body');
 
-input[type="email"],
-input[type="text"],
-input[type="password"],
-textarea {
-    width: 100%;
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    font-family: var(--font-family);
-    font-size: 1rem;
-    transition: all 0.2s;
-    background-color: #fff;
-}
+    const recipientsInput = document.getElementById('recipients-input');
+    const detectedCount = document.getElementById('detected-count');
+    const emailValidationError = document.getElementById('email-validation-error');
 
-input:focus,
-textarea:focus {
-    outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px var(--input-focus);
-}
+    const statTotal = document.getElementById('stat-total');
+    const statSent = document.getElementById('stat-sent');
+    const statFailed = document.getElementById('stat-failed');
+    const statRemaining = document.getElementById('stat-remaining');
+    const progressBar = document.getElementById('progress-bar');
+    const statusIcon = document.getElementById('status-icon');
+    const statusText = document.getElementById('status-text');
 
-.password-wrapper {
-    position: relative;
-}
+    const sendBtn = document.getElementById('send-btn');
+    const stopBtn = document.getElementById('stop-btn');
 
-.password-wrapper input {
-    padding-right: 3rem;
-}
+    let extractedEmails = [];
+    let isSending = false;
+    let stopRequested = false;
 
-.icon-button {
-    position: absolute;
-    right: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0.5rem;
-    border-radius: 50%;
-}
+    togglePasswordBtn.addEventListener('click', () => {
+        const type = dashboardPassword.getAttribute('type') === 'password' ? 'text' : 'password';
+        dashboardPassword.setAttribute('type', type);
+        togglePasswordBtn.innerHTML = type === 'password' ? '<i class="fa-regular fa-eye"></i>' : '<i class="fa-regular fa-eye-slash"></i>';
+    });
 
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    border: none;
-    border-radius: var(--radius-md);
-    font-family: var(--font-family);
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-}
+    recipientsInput.addEventListener('input', extractEmails);
 
-.btn-primary { background: linear-gradient(to right, var(--primary-color), #2563eb); color: white; }
-.btn-success { background: linear-gradient(to right, var(--success-color), #059669); color: white; }
-.btn-danger { background: linear-gradient(to right, var(--danger-color), #dc2626); color: white; }
-.btn-block { width: 100%; }
+    function extractEmails() {
+        const text = recipientsInput.value;
+        if (!text.trim()) {
+            extractedEmails = [];
+            detectedCount.textContent = '0 found';
+            return;
+        }
 
-.hidden { display: none !important; }
+        const emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+        const matches = text.match(emailRegex) || [];
+        extractedEmails = [...new Set(matches.map(e => e.toLowerCase().trim()))];
 
-.dashboard-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.5rem;
-}
+        detectedCount.textContent = `${extractedEmails.length} found`;
+        if (extractedEmails.length > 0) {
+            emailValidationError.classList.add('hidden');
+        }
+    }
 
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1.5rem;
-    align-items: start;
-}
+    sendBtn.addEventListener('click', async () => {
+        if (isSending) return;
 
-@media (max-width: 860px) {
-    .dashboard-grid { grid-template-columns: 1fr; }
-    .app-header { flex-direction: column; gap: 1rem; }
-}
+        const emailVal = dashboardEmail.value.trim();
+        const appPasswordVal = dashboardPassword.value.trim();
+        const senderNameVal = senderName.value.trim();
+        const subjectVal = subject.value.trim();
+        const messageBodyVal = messageBody.value.trim();
 
-.composer-card {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-}
+        if (!emailVal || !appPasswordVal || !senderNameVal || !subjectVal || !messageBodyVal) {
+            alert('Please fill in all input fields and write the email content.');
+            return;
+        }
 
-.composer-card form {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-}
+        if (extractedEmails.length === 0) {
+            emailValidationError.classList.remove('hidden');
+            alert('Please enter recipient emails.');
+            return;
+        }
 
-.form-row {
-    display: flex;
-    gap: 1rem;
-}
+        const recipientsToSend = [...extractedEmails];
+        const turnstileResponse = document.querySelector('[name="cf-turnstile-response"]')?.value || "";
 
-.half { flex: 1; }
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
 
-.flex-grow {
-    flex-grow: 1;
-    display: flex;
-    flex-direction: column;
-}
+        try {
+            const verifyRes = await fetch('/api/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: emailVal, appPassword: appPasswordVal, cfToken: turnstileResponse })
+            });
 
-#message-body {
-    resize: none;
-    flex-grow: 1;
-    min-height: 250px;
-}
+            const verifyResult = await verifyRes.json();
+            if (!verifyResult.success) {
+                alert(verifyResult.message || 'SMTP Authentication failed. Check your App Password.');
+                finishSendingUI();
+                return;
+            }
 
-.right-column {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-}
+            // Start sending UI (Inputs remain completely UNLOCKED)
+            startSendingUI(recipientsToSend.length);
 
-.recipients-card {
-    display: flex;
-    flex-direction: column;
-}
+            let sentCount = 0;
+            let failedCount = 0;
 
-.card-header-flex {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
+            const response = await fetch('/api/send-stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: emailVal,
+                    appPassword: appPasswordVal,
+                    senderName: senderNameVal,
+                    subject: subjectVal,
+                    messageBody: messageBodyVal,
+                    recipients: recipientsToSend,
+                    cfToken: turnstileResponse
+                })
+            });
 
-.help-subtext {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    margin-bottom: 0.5rem;
-    margin-top: -0.5rem;
-}
+            if (!response.ok) throw new Error('Streaming connection failed.');
 
-.badge {
-    background-color: #eff6ff;
-    color: var(--primary-color);
-    padding: 0.25rem 0.5rem;
-    border-radius: 99px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-#recipients-input {
-    resize: none;
-    min-height: 150px;
-    font-family: monospace;
-    font-size: 0.9rem;
-    line-height: 1.6;
-}
+            while (true) {
+                if (stopRequested) break;
 
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-}
+                const { done, value } = await reader.read();
+                if (done) break;
 
-.stat-box {
-    padding: 1rem;
-    border-radius: var(--radius-md);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border-color);
-}
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n\n');
+                buffer = lines.pop();
 
-.stat-label {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    font-weight: 500;
-    text-transform: uppercase;
-}
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const dataStr = line.replace('data: ', '').trim();
+                        if (dataStr === '[DONE]') break;
 
-.stat-value {
-    font-size: 1.75rem;
-    font-weight: 700;
-    margin-top: 0.25rem;
-}
+                        try {
+                            const event = JSON.parse(dataStr);
+                            if (event.success) {
+                                sentCount++;
+                                updateProgressUI(sentCount, failedCount, recipientsToSend.length, `Sent: ${event.recipient}`);
+                            } else {
+                                failedCount++;
+                                updateProgressUI(sentCount, failedCount, recipientsToSend.length, `Failed: ${event.recipient}`);
+                            }
+                        } catch (e) { }
+                    }
+                }
+            }
 
-.neutral .stat-value { color: var(--primary-color); }
-.success .stat-value { color: var(--success-color); }
-.danger .stat-value { color: var(--danger-color); }
-.warning .stat-value { color: #f59e0b; }
+            isSending = false;
+            if (stopRequested) {
+                statusIcon.className = 'fa-solid fa-circle-stop text-danger';
+                statusText.textContent = 'Process stopped by user.';
+            } else {
+                statusIcon.className = 'fa-solid fa-circle-check text-success';
+                statusText.textContent = 'Completed successfully!';
+            }
 
-.progress-bar-container {
-    height: 8px;
-    background-color: var(--border-color);
-    border-radius: 99px;
-    overflow: hidden;
-    margin-bottom: 1rem;
-}
+        } catch (err) {
+            console.error('Send error:', err);
+            alert('Connection error occurred during send stream.');
+        } finally {
+            isSending = false;
+            finishSendingUI();
+        }
+    });
 
-.progress-bar {
-    height: 100%;
-    background: linear-gradient(to right, var(--primary-color), var(--success-color));
-    transition: width 0.3s ease;
-}
+    stopBtn.addEventListener('click', async () => {
+        stopRequested = true;
+        statusIcon.className = 'fa-solid fa-spinner fa-spin text-warning';
+        statusText.textContent = 'Stopping send process...';
+        stopBtn.disabled = true;
 
-.status-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
-    font-size: 0.95rem;
-    font-weight: 500;
-}
+        try {
+            await fetch('/api/stop', { method: 'POST' });
+        } catch (e) {
+            console.error('Stop error', e);
+        }
+    });
 
-.control-buttons { display: flex; gap: 1rem; }
-.flex-1 { flex: 1; }
+    function startSendingUI(total) {
+        isSending = true;
+        stopRequested = false;
 
-.error-message {
-    background-color: #fef2f2;
-    color: var(--danger-color);
-    padding: 0.75rem;
-    border-radius: var(--radius-md);
-    font-size: 0.9rem;
-    margin-top: 0.5rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    border-left: 3px solid var(--danger-color);
-}
+        statTotal.textContent = total;
+        statSent.textContent = '0';
+        statFailed.textContent = '0';
+        statRemaining.textContent = total;
+        progressBar.style.width = '0%';
 
-.password-gate {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #312e81 100%);
-}
+        statusIcon.className = 'fa-solid fa-circle-notch fa-spin text-primary';
+        statusText.textContent = 'Sending emails...';
 
-.gate-card {
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 20px;
-    padding: 3rem 2.5rem;
-    width: 100%;
-    max-width: 400px;
-    text-align: center;
-}
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
+        stopBtn.classList.remove('hidden');
+        stopBtn.disabled = false;
+    }
 
-.gate-card h2 { color: #f1f5f9; font-size: 1.6rem; margin-bottom: 0.25rem; }
-.gate-card p { color: #94a3b8; font-size: 0.95rem; margin-bottom: 1.75rem; }
-.gate-icon { width: 70px; height: 70px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #3b82f6); display: flex; align-items: center; justify-content: center; margin: 0 auto 1.25rem auto; font-size: 1.75rem; color: white; }
-.gate-card input[type="password"] { background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.15); color: #f1f5f9; }
-.gate-error { background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.25); color: #fca5a5; padding: 0.65rem 0.85rem; border-radius: 8px; font-size: 0.9rem; margin-bottom: 1rem; }
+    function updateProgressUI(sentCount, failedCount, total, customText) {
+        statSent.textContent = sentCount;
+        statFailed.textContent = failedCount;
+
+        const remaining = Math.max(0, total - (sentCount + failedCount));
+        statRemaining.textContent = remaining;
+
+        const percentage = Math.min(100, Math.round(((sentCount + failedCount) / total) * 100));
+        progressBar.style.width = `${percentage}%`;
+
+        if (customText && statusText && isSending && !stopRequested) {
+            statusText.textContent = customText;
+        }
+    }
+
+    function finishSendingUI() {
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send All';
+        stopBtn.classList.add('hidden');
+
+        if (window.turnstile) {
+            try { window.turnstile.reset(); } catch (e) { }
+        }
+    }
+});
