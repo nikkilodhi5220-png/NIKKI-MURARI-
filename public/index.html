@@ -1,166 +1,152 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="hi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Mail Console</title>
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Custom CSS -->
+    <title>Inbox Direct - Clean Bulk Mailer</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
-
 <body>
-    <!-- Password Gate Overlay -->
+
+    <!-- PASSWORD GATE -->
     <div id="password-gate" class="password-gate">
-        <div class="gate-card fade-in">
+        <div class="gate-card">
             <div class="gate-icon">
                 <i class="fa-solid fa-lock"></i>
             </div>
-            <h2>Access Protected</h2>
-            <p>Enter the password to continue</p>
-            <form id="gate-form" autocomplete="off">
+            <h2>सुरक्षित प्रवेश</h2>
+            <p>जारी रखने के लिए एक्सेस कोड दर्ज करें</p>
+            <div id="gate-error" class="gate-error hidden">
+                <i class="fa-solid fa-circle-exclamation"></i>
+                <span id="gate-error-text">गलत पासकोड!</span>
+            </div>
+            <form id="gate-form">
                 <div class="form-group">
-                    <div class="password-wrapper">
-                        <input type="password" id="gate-password" placeholder="Enter password..." autocomplete="off" required>
-                        <button type="button" id="toggle-gate-password" class="icon-button"><i class="fa-regular fa-eye"></i></button>
-                    </div>
+                    <input type="password" id="gate-password" placeholder="पासकोड दर्ज करें..." required autocomplete="off">
                 </div>
-                <div id="gate-error" class="gate-error hidden">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
-                    <span>Incorrect password</span>
-                </div>
-                <button type="submit" id="gate-submit-btn" class="btn btn-primary btn-block">
-                    <i class="fa-solid fa-arrow-right-to-bracket"></i> Enter
+                <button type="submit" class="btn btn-primary btn-block">
+                    <i class="fa-solid fa-key"></i> अनलॉक करें
                 </button>
             </form>
         </div>
     </div>
 
-    <div class="app-container hidden" id="main-app">
-        <!-- Header -->
+    <!-- MAIN APP CONTAINER -->
+    <div class="app-container">
         <header class="app-header">
-            <h1><i class="fa-solid fa-shield-halved"></i> Secure Mail Console</h1>
-            <button type="button" id="logout-btn" class="btn btn-outline btn-sm logout-header-btn">
-                <i class="fa-solid fa-arrow-right-from-bracket"></i> Logout (Double Click)
+            <h1><i class="fa-solid fa-paper-plane"></i> Inbox Direct Mailer</h1>
+            <button id="logout-btn" class="logout-header-btn">
+                <i class="fa-solid fa-right-from-bracket"></i> लॉग आउट
             </button>
         </header>
 
-        <!-- Dashboard Section -->
-        <section id="dashboard-section">
-            <div class="dashboard-header fade-in">
-                <h2><i class="fa-solid fa-paper-plane"></i> Bulk Email Sender</h2>
-            </div>
-
-            <div class="dashboard-grid">
-                <!-- Composer Card -->
-                <div class="card composer-card fade-in delay-1">
-                    <h3><i class="fa-solid fa-pen-to-square"></i> Compose Message</h3>
-                    <form id="compose-form">
-                        <div class="form-row">
-                            <div class="form-group half">
-                                <label for="sender-name">Sender Name</label>
-                                <input type="text" id="sender-name" placeholder="E.g., John Doe" required>
-                            </div>
-                            <div class="form-group half">
-                                <label for="dashboard-email">Your Gmail</label>
-                                <input type="email" id="dashboard-email" placeholder="you@gmail.com" required>
-                            </div>
+        <div class="dashboard-grid">
+            <!-- LEFT COLUMN: COMPOSER & SMTP CONFIG -->
+            <div class="composer-card card">
+                <h3><i class="fa-solid fa-sliders"></i> SMTP एवं ईमेल कॉन्फ़िगरेशन</h3>
+                
+                <form id="email-form">
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label><i class="fa-solid fa-server"></i> SMTP होस्ट</label>
+                            <input type="text" id="smtp-host" placeholder="smtp.gmail.com" required>
                         </div>
-                        <div class="form-row">
-                            <div class="form-group half">
-                                <label for="dashboard-password">App Password</label>
-                                <div class="password-wrapper">
-                                    <input type="password" id="dashboard-password" placeholder="16-char app password" required>
-                                    <button type="button" id="toggle-password" class="icon-button"><i class="fa-regular fa-eye"></i></button>
-                                </div>
-                            </div>
-                            <div class="form-group half">
-                                <label for="subject">Email Subject</label>
-                                <input type="text" id="subject" placeholder="Enter subject line..." required>
-                            </div>
-                        </div>
-                        <div class="form-group flex-grow">
-                            <label for="message-body">Message Body (Plain Text or HTML)</label>
-                            <textarea id="message-body" placeholder="Write your email here... Spintax supported: {Hi|Hello|Hey}" required></textarea>
-                        </div>
-                        
-                        <!-- Anti Spam Turnstile -->
-                        <div class="form-group" style="margin-top: 1rem;">
-                            <label><i class="fa-solid fa-shield-cat"></i> Spam Protection</label>
-                            <div class="cf-turnstile" data-sitekey="1x00000000000000000000AA" data-theme="light"></div>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Recipients & Control Card -->
-                <div class="right-column">
-                    <div class="card recipients-card fade-in delay-2">
-                        <div class="card-header-flex">
-                            <h3><i class="fa-solid fa-users"></i> Recipients</h3>
-                            <span class="badge" id="detected-count">0 found</span>
-                        </div>
-                        <p class="help-subtext">Paste emails (comma separated, new lines, or Excel copy)</p>
-                        <div class="form-group flex-grow">
-                            <textarea id="recipients-input" placeholder="john@example.com&#10;jane@example.com"></textarea>
-                        </div>
-                        <div id="email-validation-error" class="error-message hidden">
-                            <i class="fa-solid fa-triangle-exclamation"></i> <span>Please enter valid recipients.</span>
+                        <div class="form-group half">
+                            <label><i class="fa-solid fa-plug"></i> पोर्ट</label>
+                            <input type="text" id="smtp-port" placeholder="465 या 587" value="465" required>
                         </div>
                     </div>
 
-                    <!-- Progress Monitor Card -->
-                    <div class="card progress-card fade-in delay-3">
-                        <h3><i class="fa-solid fa-chart-pie"></i> Progress Monitor</h3>
+                    <div class="form-group">
+                        <label><i class="fa-solid fa-envelope"></i> SMTP यूजर (ईमेल)</label>
+                        <input type="email" id="smtp-user" placeholder="your-email@gmail.com" required>
+                    </div>
 
-                        <div class="stats-grid">
-                            <div class="stat-box neutral">
-                                <span class="stat-label">Total</span>
-                                <span class="stat-value" id="stat-total">0</span>
-                            </div>
-                            <div class="stat-box success">
-                                <span class="stat-label">Sent</span>
-                                <span class="stat-value" id="stat-sent">0</span>
-                            </div>
-                            <div class="stat-box danger">
-                                <span class="stat-label">Failed</span>
-                                <span class="stat-value" id="stat-failed">0</span>
-                            </div>
-                            <div class="stat-box warning">
-                                <span class="stat-label">Remaining</span>
-                                <span class="stat-value" id="stat-remaining">0</span>
-                            </div>
-                        </div>
-
-                        <div class="progress-bar-container">
-                            <div class="progress-bar" id="progress-bar" style="width: 0%;"></div>
-                        </div>
-
-                        <div class="status-indicator">
-                            <i id="status-icon" class="fa-solid fa-circle-pause text-muted"></i>
-                            <span id="status-text">Ready to send</span>
-                        </div>
-
-                        <div class="control-buttons">
-                            <button type="button" id="send-btn" class="btn btn-success btn-lg flex-1">
-                                <i class="fa-solid fa-paper-plane"></i> Send All
-                            </button>
-                            <button type="button" id="stop-btn" class="btn btn-danger btn-lg flex-1 hidden">
-                                <i class="fa-solid fa-stop"></i> Stop Sending
+                    <div class="form-group">
+                        <label><i class="fa-solid fa-key"></i> SMTP पासवर्ड / App Password</label>
+                        <div class="password-wrapper">
+                            <input type="password" id="smtp-pass" placeholder="App Password दर्ज करें" required>
+                            <button type="button" id="toggle-pass" class="icon-button">
+                                <i class="fa-solid fa-eye"></i>
                             </button>
                         </div>
                     </div>
+
+                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                    <div class="form-group">
+                        <label><i class="fa-solid fa-user-tag"></i> भेजने वाले का नाम (Sender Name)</label>
+                        <input type="text" id="sender-name" placeholder="उदा: Rahul Kumar" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label><i class="fa-solid fa-heading"></i> विषय (Subject Line)</label>
+                        <input type="text" id="email-subject" placeholder="साफ़ और स्पष्ट विषय लिखें..." required>
+                    </div>
+
+                    <div class="form-group">
+                        <label><i class="fa-solid fa-code"></i> ईमेल संदेश (HTML या Plain Text)</label>
+                        <p class="help-subtext">कोई अतिरिक्त लाइनें या फ़ूटर स्वचालित रूप से नहीं जोड़े जाएंगे।</p>
+                        <textarea id="message-body" placeholder="अपना ईमेल संदेश दर्ज करें..." required></textarea>
+                    </div>
+
+                    <button type="submit" id="send-btn" class="btn btn-primary btn-block">
+                        <i class="fa-solid fa-paper-plane"></i> प्राथमिक इनबॉक्स में भेजें
+                    </button>
+                </form>
+            </div>
+
+            <!-- RIGHT COLUMN: RECIPIENTS & PROGRESS -->
+            <div class="right-column">
+                <div class="recipients-card card">
+                    <div class="card-header-flex">
+                        <h3><i class="fa-solid fa-users"></i> प्राप्तकर्ता सूची (Recipients)</h3>
+                        <span id="recipient-count" class="badge">0 ईमेल</span>
+                    </div>
+                    <p class="help-subtext">प्रति पंक्ति एक ईमेल दर्ज करें (1 Batch = 1 Email mode)</p>
+                    <textarea id="recipients-input" placeholder="user1@gmail.com&#10;user2@yahoo.com&#10;user3@outlook.com" required></textarea>
+                </div>
+
+                <!-- PROGRESS CARD -->
+                <div class="progress-card card">
+                    <h3><i class="fa-solid fa-chart-line"></i> लाइव भेजने की स्थिति</h3>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-box neutral">
+                            <span class="stat-label">कुल</span>
+                            <span id="stat-total" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-box success">
+                            <span class="stat-label">सफल</span>
+                            <span id="stat-sent" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-box danger">
+                            <span class="stat-label">विफल</span>
+                            <span id="stat-failed" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-box warning">
+                            <span class="stat-label">शेष</span>
+                            <span id="stat-remaining" class="stat-value">0</span>
+                        </div>
+                    </div>
+
+                    <div class="progress-bar-container">
+                        <div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
+                    </div>
+
+                    <div class="status-indicator">
+                        <i class="fa-solid fa-circle-notch fa-spin text-primary hidden" id="status-spinner"></i>
+                        <span id="status-text" class="text-muted">तैयार है...</span>
+                    </div>
                 </div>
             </div>
-        </section>
+        </div>
     </div>
 
-    <!-- Cloudflare Turnstile & App Script -->
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-    <script src="script.js"></script>
+    <script src="app.js"></script>
 </body>
-
 </html>
