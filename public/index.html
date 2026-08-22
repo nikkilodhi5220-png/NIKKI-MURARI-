@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inbox Direct - Clean Bulk Mailer</title>
+    <title>Inbox Direct Bulk Mailer</title>
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,7 +35,7 @@
         </div>
     </div>
 
-    <!-- MAIN APP CONTAINER -->
+    <!-- APP CONTAINER -->
     <div class="app-container">
         <header class="app-header">
             <h1><i class="fa-solid fa-paper-plane"></i> Inbox Direct Mailer</h1>
@@ -45,9 +45,9 @@
         </header>
 
         <div class="dashboard-grid">
-            <!-- LEFT COLUMN: COMPOSER & SMTP CONFIG -->
+            <!-- LEFT COLUMN -->
             <div class="composer-card card">
-                <h3><i class="fa-solid fa-sliders"></i> SMTP एवं ईमेल कॉन्फ़िगरेशन</h3>
+                <h3><i class="fa-solid fa-sliders"></i> SMTP एवं ईमेल सेटिंग्स</h3>
                 
                 <form id="email-form">
                     <div class="form-row">
@@ -62,12 +62,12 @@
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-envelope"></i> SMTP यूजर (ईमेल)</label>
+                        <label><i class="fa-solid fa-envelope"></i> SMTP ईमेल (User)</label>
                         <input type="email" id="smtp-user" placeholder="your-email@gmail.com" required>
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-key"></i> SMTP पासवर्ड / App Password</label>
+                        <label><i class="fa-solid fa-key"></i> App Password</label>
                         <div class="password-wrapper">
                             <input type="password" id="smtp-pass" placeholder="App Password दर्ज करें" required>
                             <button type="button" id="toggle-pass" class="icon-button">
@@ -84,14 +84,14 @@
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-heading"></i> विषय (Subject Line)</label>
-                        <input type="text" id="email-subject" placeholder="साफ़ और स्पष्ट विषय लिखें..." required>
+                        <label><i class="fa-solid fa-heading"></i> विषय (Subject)</label>
+                        <input type="text" id="email-subject" placeholder="साफ़ और स्पष्ट विषय रखें..." required>
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-code"></i> ईमेल संदेश (HTML या Plain Text)</label>
-                        <p class="help-subtext">कोई अतिरिक्त लाइनें या फ़ूटर स्वचालित रूप से नहीं जोड़े जाएंगे।</p>
-                        <textarea id="message-body" placeholder="अपना ईमेल संदेश दर्ज करें..." required></textarea>
+                        <label><i class="fa-solid fa-code"></i> ईमेल संदेश Body</label>
+                        <p class="help-subtext">कोई अतिरिक्त लाइन या फुटर ऑटोमेटिक नहीं जोड़ा जाएगा।</p>
+                        <textarea id="message-body" placeholder="अपना संदेश यहाँ लिखें..." required></textarea>
                     </div>
 
                     <button type="submit" id="send-btn" class="btn btn-primary btn-block">
@@ -100,20 +100,20 @@
                 </form>
             </div>
 
-            <!-- RIGHT COLUMN: RECIPIENTS & PROGRESS -->
+            <!-- RIGHT COLUMN -->
             <div class="right-column">
                 <div class="recipients-card card">
                     <div class="card-header-flex">
-                        <h3><i class="fa-solid fa-users"></i> प्राप्तकर्ता सूची (Recipients)</h3>
+                        <h3><i class="fa-solid fa-users"></i> प्राप्तकर्ता (Recipients)</h3>
                         <span id="recipient-count" class="badge">0 ईमेल</span>
                     </div>
-                    <p class="help-subtext">प्रति पंक्ति एक ईमेल दर्ज करें (1 Batch = 1 Email mode)</p>
-                    <textarea id="recipients-input" placeholder="user1@gmail.com&#10;user2@yahoo.com&#10;user3@outlook.com" required></textarea>
+                    <p class="help-subtext">प्रति पंक्ति एक ईमेल दर्ज करें (1 Email Loop Mode)</p>
+                    <textarea id="recipients-input" placeholder="email1@gmail.com&#10;email2@yahoo.com" required></textarea>
                 </div>
 
-                <!-- PROGRESS CARD -->
+                <!-- PROGRESS MONITOR -->
                 <div class="progress-card card">
-                    <h3><i class="fa-solid fa-chart-line"></i> लाइव भेजने की स्थिति</h3>
+                    <h3><i class="fa-solid fa-chart-line"></i> लाइव डिलीवरी स्टेटस</h3>
                     
                     <div class="stats-grid">
                         <div class="stat-box neutral">
@@ -147,6 +147,6 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
