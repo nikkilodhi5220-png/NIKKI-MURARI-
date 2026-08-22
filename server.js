@@ -2,6 +2,7 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -10,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// HTML से स्पैम ट्रिगर्स हटाने और प्लेन टेक्स्ट तैयार करने का फ़ंक्शन
+// HTML से टैग्स हटाकर साफ प्लेन-टेक्स्ट बनाने का फ़ंक्शन
 function stripHtml(html) {
     if (!html) return '';
     return html
@@ -21,6 +22,14 @@ function stripHtml(html) {
         .trim();
 }
 
+// रैंडम यूनिक नंबर/आईडी जनरेट करने का फ़ंक्शन
+function generateUniqueId() {
+    const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const timestamp = Date.now().toString().slice(-6);
+    return `REF-${timestamp}-${randomHex}`;
+}
+
+// रैंडम डिले (Min-Max Milliseconds)
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 app.post('/api/send-emails', async (req, res) => {
@@ -30,7 +39,6 @@ app.post('/api/send-emails', async (req, res) => {
 
     const { smtp, senderName, subject, htmlBody, recipients } = req.body;
 
-    // अगर फ्रंटएंड से Host/Port न भी आए तो ऑटोमैटिक Gmail SMTP यूज़ होगा
     const smtpHost = (smtp && smtp.host && smtp.host.trim()) ? smtp.host.trim() : 'smtp.gmail.com';
     const smtpPort = (smtp && smtp.port && parseInt(smtp.port)) ? parseInt(smtp.port) : 465;
 
@@ -39,13 +47,17 @@ app.post('/api/send-emails', async (req, res) => {
         return res.end();
     }
 
+    const cleanUser = smtp.user.trim();
+    const cleanPass = smtp.pass.trim().replace(/\s+/g, '');
+
+    // प्रॉपर और सेफ SMTP ट्रांसपोर्टर सेटिंग्स
     const transporter = nodemailer.createTransport({
         host: smtpHost,
         port: smtpPort,
-        secure: smtpPort === 465,
+        secure: smtpPort === 465, // 465 पर SSL true, 587 पर false
         auth: {
-            user: smtp.user.trim(),
-            pass: smtp.pass.trim().replace(/\s+/g, '') // पासवर्ड के स्पेस स्वतः हटाएँ
+            user: cleanUser,
+            pass: cleanPass
         },
         tls: {
             rejectUnauthorized: false
@@ -66,21 +78,41 @@ app.post('/api/send-emails', async (req, res) => {
 
     res.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
 
-    // 🔴 Anti-Spam Direct Inboxing Loop (1-By-1)
     for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i].trim();
         if (!recipient) continue;
 
-        const plainText = stripHtml(htmlBody);
+        // हर ईमेल के लिए एक पूरी तरह से यूनिक ट्रैकिंग/रैंडम कोड
+        const trackingId = generateUniqueId();
+        const domainName = cleanUser.split('@')[1] || 'gmail.com';
 
+        // 1. यूनिक HTML बॉडी (नीचे सेफ यूनिक नंबर और हिडन रिफ कोड जोड़ा गया है)
+        const customHtmlBody = `
+            ${htmlBody}
+            <br><br>
+            <hr style="border: none; border-top: 1px solid #e0e0e0; margin-top: 20px;">
+            <div style="font-size: 11px; color: #888888; font-family: Arial, sans-serif;">
+                <p style="margin: 2px 0;">Ref ID: <strong>${trackingId}</strong></p>
+                <p style="margin: 2px 0; display: none;">Security Code: ${crypto.randomUUID()}</p>
+            </div>
+        `;
+
+        // 2. यूनिक Plain Text बॉडी
+        const basePlainText = stripHtml(htmlBody);
+        const customPlainText = `${basePlainText}\n\n-------------------------\nRef ID: ${trackingId}`;
+
+        // 3. एंटी-स्पैम हेडर्स जो मेल को Inbox में लैंड कराते हैं
         const mailOptions = {
-            from: `"${senderName.trim()}" <${smtp.user.trim()}>`,
+            from: `"${senderName.trim()}" <${cleanUser}>`,
             to: recipient,
             subject: subject.trim(),
-            text: plainText,             // Plain-text Fallback (Primary Inbox के लिए अत्यंत महत्वपूर्ण)
-            html: htmlBody,
+            text: customPlainText,
+            html: customHtmlBody,
             headers: {
-                'X-Entity-Ref-ID': Date.now().toString() // प्रत्येक ईमेल को यूनिक बनाता है
+                'X-Entity-Ref-ID': trackingId,
+                'X-Mailer': 'NodeMailer Standard Client',
+                'Message-ID': `<${Date.now()}.${trackingId}@${domainName}>`,
+                'List-Unsubscribe': `<mailto:${cleanUser}?subject=unsubscribe>`
             }
         };
 
@@ -110,10 +142,10 @@ app.post('/api/send-emails', async (req, res) => {
             })}\n\n`);
         }
 
-        // हर ईमेल के बाद 1 से 2 सेकंड का रैंडम गैप (Spam Filter bypass करने के लिए)
+        // 🔴 सेफ इनबॉक्सिंग स्पीड: हर ईमेल के बीच 5 से 9 सेकंड का रैंडम डिले
         if (i < recipients.length - 1) {
-            const randomDelay = Math.floor(Math.random() * 500) + 700;
-            await delay(randomDelay);
+            const safeRandomDelay = Math.floor(Math.random() * 4000) + 5000; // 5000ms - 9000ms
+            await delay(safeRandomDelay);
         }
     }
 
@@ -122,4 +154,4 @@ app.post('/api/send-emails', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Safe Mailer Server running on port ${PORT}`));
