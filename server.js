@@ -110,9 +110,9 @@ app.post('/api/send-emails', async (req, res) => {
             })}\n\n`);
         }
 
-        // हर ईमेल के बाद 3.5 से 5 सेकंड का रैंडम गैप (Spam Filter bypass करने के लिए)
+        // हर ईमेल के बाद 1 से 1.5 सेकंड का रैंडम गैप (Spam Filter bypass करने के लिए)
         if (i < recipients.length - 1) {
-            const randomDelay = Math.floor(Math.random() * 1500) + 3500;
+            const randomDelay = Math.floor(Math.random() * 300) + 500;
             await delay(randomDelay);
         }
     }
