@@ -1,235 +1,128 @@
 document.addEventListener('DOMContentLoaded', () => {
-
-    // Auth Elements
-    const passwordGate = document.getElementById('password-gate');
-    const mainApp = document.getElementById('main-app');
+    // 🔒 PASSCODE GATE SETTINGS
+    const APP_PASSCODE = "1234"; // अपना मनचाहा पासकोड यहाँ सेट करें
+    const gateModal = document.getElementById('password-gate');
     const gateForm = document.getElementById('gate-form');
-    const gatePassword = document.getElementById('gate-password');
+    const gatePassInput = document.getElementById('gate-password');
     const gateError = document.getElementById('gate-error');
-    const gateSubmitBtn = document.getElementById('gate-submit-btn');
-    const toggleGatePassword = document.getElementById('toggle-gate-password');
     const logoutBtn = document.getElementById('logout-btn');
 
-    if (sessionStorage.getItem('authenticated') === 'true') {
-        passwordGate?.classList.add('hidden');
-        mainApp?.classList.remove('hidden');
-    } else {
-        passwordGate?.classList.remove('hidden');
-        mainApp?.classList.add('hidden');
-    }
-
-    if (toggleGatePassword && gatePassword) {
-        toggleGatePassword.addEventListener('click', () => {
-            const type = gatePassword.getAttribute('type') === 'password' ? 'text' : 'password';
-            gatePassword.setAttribute('type', type);
-            toggleGatePassword.innerHTML = type === 'password' ? '<i class="fa-regular fa-eye"></i>' : '<i class="fa-regular fa-eye-slash"></i>';
-        });
+    if (sessionStorage.getItem('unlocked') === 'true') {
+        if (gateModal) gateModal.classList.add('hidden');
     }
 
     if (gateForm) {
-        gateForm.addEventListener('submit', async (e) => {
+        gateForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            const password = gatePassword.value.trim();
-            if (!password) return;
-
-            gateSubmitBtn.disabled = true;
-            gateSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
-            gateError?.classList.add('hidden');
-
-            try {
-                const response = await fetch('/api/auth', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    sessionStorage.setItem('authenticated', 'true');
-                    passwordGate.classList.add('hidden');
-                    mainApp.classList.remove('hidden');
-                } else {
-                    gateError?.classList.remove('hidden');
-                    gatePassword.value = '';
-                    gatePassword.focus();
-                }
-            } catch (err) {
-                alert('Connection error. Please try again.');
-            } finally {
-                gateSubmitBtn.disabled = false;
-                gateSubmitBtn.innerHTML = '<i class="fa-solid fa-arrow-right-to-bracket"></i> Enter';
+            if (gatePassInput.value === APP_PASSCODE) {
+                sessionStorage.setItem('unlocked', 'true');
+                gateError.classList.add('hidden');
+                gateModal.classList.add('gate-unlocked');
+                setTimeout(() => {
+                    gateModal.classList.add('hidden');
+                    gateModal.classList.remove('gate-unlocked');
+                }, 500);
+            } else {
+                gateError.classList.remove('hidden');
+                gatePassInput.value = '';
+                gatePassInput.focus();
             }
         });
     }
 
     if (logoutBtn) {
-        logoutBtn.addEventListener('dblclick', () => {
-            sessionStorage.removeItem('authenticated');
-            window.location.reload();
+        logoutBtn.addEventListener('click', () => {
+            sessionStorage.removeItem('unlocked');
+            location.reload();
         });
     }
 
-    // Dashboard Elements
-    const dashboardEmail = document.getElementById('dashboard-email');
-    const dashboardPassword = document.getElementById('dashboard-password');
-    const togglePasswordBtn = document.getElementById('toggle-password');
+    // SHOW/HIDE PASSWORD
+    const togglePassBtn = document.getElementById('toggle-pass');
+    const smtpPassInput = document.getElementById('smtp-pass');
+    
+    if (togglePassBtn && smtpPassInput) {
+        togglePassBtn.addEventListener('click', () => {
+            const type = smtpPassInput.getAttribute('type') === 'password' ? 'text' : 'password';
+            smtpPassInput.setAttribute('type', type);
+            const icon = togglePassBtn.querySelector('i');
+            if (icon) {
+                icon.classList.toggle('fa-eye');
+                icon.classList.toggle('fa-eye-slash');
+            }
+        });
+    }
 
-    const senderName = document.getElementById('sender-name');
-    const subject = document.getElementById('subject');
-    const messageBody = document.getElementById('message-body');
-
+    // RECIPIENT COUNT COUNTER
     const recipientsInput = document.getElementById('recipients-input');
-    const detectedCount = document.getElementById('detected-count');
-    const emailValidationError = document.getElementById('email-validation-error');
+    const recipientCountBadge = document.getElementById('recipient-count');
+
+    if (recipientsInput && recipientCountBadge) {
+        recipientsInput.addEventListener('input', () => {
+            const lines = recipientsInput.value
+                .split('\n')
+                .map(e => e.trim())
+                .filter(e => e.length > 0);
+            recipientCountBadge.textContent = `${lines.length} ईमेल`;
+        });
+    }
+
+    // EMAIL SENDING & SSE LOGIC
+    const emailForm = document.getElementById('email-form');
+    const sendBtn = document.getElementById('send-btn');
+    const progressBar = document.getElementById('progress-bar');
+    const statusSpinner = document.getElementById('status-spinner');
+    const statusText = document.getElementById('status-text');
 
     const statTotal = document.getElementById('stat-total');
     const statSent = document.getElementById('stat-sent');
     const statFailed = document.getElementById('stat-failed');
     const statRemaining = document.getElementById('stat-remaining');
-    const progressBar = document.getElementById('progress-bar');
-    const statusIcon = document.getElementById('status-icon');
-    const statusText = document.getElementById('status-text');
 
-    const sendBtn = document.getElementById('send-btn');
-    const stopBtn = document.getElementById('stop-btn');
+    if (emailForm) {
+        emailForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
 
-    let extractedRecipients = [];
-    let isSending = false;
-    let stopRequested = false;
+            const recipientsArr = recipientsInput.value
+                .split('\n')
+                .map(e => e.trim())
+                .filter(e => e.length > 0);
 
-    if (togglePasswordBtn && dashboardPassword) {
-        togglePasswordBtn.addEventListener('click', () => {
-            const type = dashboardPassword.getAttribute('type') === 'password' ? 'text' : 'password';
-            dashboardPassword.setAttribute('type', type);
-            togglePasswordBtn.innerHTML = type === 'password' ? '<i class="fa-regular fa-eye"></i>' : '<i class="fa-regular fa-eye-slash"></i>';
-        });
-    }
-
-    if (recipientsInput) {
-        recipientsInput.addEventListener('input', () => {
-            const text = recipientsInput.value;
-            if (!text.trim()) {
-                extractedRecipients = [];
-                if (detectedCount) detectedCount.textContent = '0 found';
+            if (recipientsArr.length === 0) {
+                alert('कृपया कम से कम एक ईमेल दर्ज करें!');
                 return;
             }
 
-            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-            extractedRecipients = [...new Set(lines)];
-
-            if (detectedCount) detectedCount.textContent = `${extractedRecipients.length} found`;
-            if (extractedRecipients.length > 0 && emailValidationError) {
-                emailValidationError.classList.add('hidden');
-            }
-        });
-    }
-
-    function startSendingUI(total) {
-        isSending = true;
-        stopRequested = false;
-        if (statTotal) statTotal.textContent = total;
-        if (statSent) statSent.textContent = '0';
-        if (statFailed) statFailed.textContent = '0';
-        if (statRemaining) statRemaining.textContent = total;
-        if (progressBar) progressBar.style.width = '0%';
-
-        if (statusIcon) statusIcon.className = 'fa-solid fa-circle-notch fa-spin text-primary';
-        if (statusText) statusText.textContent = 'Dispatching emails with safe human delay...';
-
-        sendBtn?.classList.add('hidden');
-        stopBtn?.classList.remove('hidden');
-        if (stopBtn) stopBtn.disabled = false;
-    }
-
-    function updateProgressUI(sentCount, failedCount, total, customText) {
-        if (statSent) statSent.textContent = sentCount;
-        if (statFailed) statFailed.textContent = failedCount;
-
-        const remaining = Math.max(0, total - (sentCount + failedCount));
-        if (statRemaining) statRemaining.textContent = remaining;
-
-        const percentage = Math.min(100, Math.round(((sentCount + failedCount) / total) * 100));
-        if (progressBar) progressBar.style.width = `${percentage}%`;
-
-        if (customText && statusText && isSending && !stopRequested) {
-            statusText.textContent = customText;
-        }
-    }
-
-    function finishSendingUI() {
-        sendBtn?.classList.remove('hidden');
-        stopBtn?.classList.add('hidden');
-        if (sendBtn) {
-            sendBtn.disabled = false;
-            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Launch Campaign';
-        }
-    }
-
-    if (sendBtn) {
-        sendBtn.addEventListener('click', async () => {
-            if (isSending) return;
-
-            const emailVal = dashboardEmail.value.trim();
-            const appPasswordVal = dashboardPassword.value.trim();
-            const senderNameVal = senderName.value.trim();
-            const subjectVal = subject.value.trim();
-            const messageBodyVal = messageBody.value.trim();
-
-            if (!emailVal || !appPasswordVal || !senderNameVal || !subjectVal || !messageBodyVal) {
-                return alert('Please fill in all required fields.');
-            }
-            if (extractedRecipients.length === 0) {
-                emailValidationError?.classList.remove('hidden');
-                return alert('Please enter recipient list.');
-            }
-
-            const recipientsToSend = [...extractedRecipients];
+            const payload = {
+                smtp: {
+                    host: document.getElementById('smtp-host').value.trim(),
+                    port: document.getElementById('smtp-port').value.trim(),
+                    user: document.getElementById('smtp-user').value.trim(),
+                    pass: document.getElementById('smtp-pass').value.trim()
+                },
+                senderName: document.getElementById('sender-name').value.trim(),
+                subject: document.getElementById('email-subject').value.trim(),
+                htmlBody: document.getElementById('message-body').value,
+                recipients: recipientsArr
+            };
 
             sendBtn.disabled = true;
-            sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying SMTP...';
+            sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> भेजा जा रहा है...';
+            if (statusSpinner) statusSpinner.classList.remove('hidden');
+            if (statusText) statusText.textContent = 'कनेक्ट किया जा रहा है...';
 
             try {
-                const verifyRes = await fetch('/api/verify', {
+                const response = await fetch('/api/send-emails', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: emailVal, appPassword: appPasswordVal })
+                    body: JSON.stringify(payload)
                 });
-
-                const verifyResult = await verifyRes.json();
-                if (!verifyResult.success) {
-                    alert(verifyResult.message || 'SMTP Authentication failed.');
-                    finishSendingUI();
-                    return;
-                }
-
-                startSendingUI(recipientsToSend.length);
-
-                let sentCount = 0;
-                let failedCount = 0;
-
-                const response = await fetch('/api/send-stream', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        email: emailVal,
-                        appPassword: appPasswordVal,
-                        senderName: senderNameVal,
-                        subject: subjectVal,
-                        messageBody: messageBodyVal,
-                        recipients: recipientsToSend
-                    })
-                });
-
-                if (!response.ok) throw new Error('Streaming connection failed.');
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
 
                 while (true) {
-                    if (stopRequested) break;
-
                     const { done, value } = await reader.read();
                     if (done) break;
 
@@ -239,57 +132,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
-                            const dataStr = line.replace('data: ', '').trim();
-                            if (dataStr === '[DONE]') break;
-
-                            try {
-                                const event = JSON.parse(dataStr);
-                                if (event.success) {
-                                    sentCount++;
-                                    updateProgressUI(sentCount, failedCount, recipientsToSend.length, `Sent to: ${event.recipient}`);
-                                } else {
-                                    failedCount++;
-                                    updateProgressUI(sentCount, failedCount, recipientsToSend.length, `Failed: ${event.recipient}`);
-                                }
-                            } catch (e) {
-                                console.error('Data parsing error:', e);
-                            }
+                            const data = JSON.parse(line.replace('data: ', ''));
+                            handleSSEMessage(data);
                         }
                     }
                 }
-
-                isSending = false;
-                if (stopRequested) {
-                    if (statusIcon) statusIcon.className = 'fa-solid fa-circle-stop text-rose-500';
-                    if (statusText) statusText.textContent = 'Process stopped by user.';
-                } else {
-                    if (statusIcon) statusIcon.className = 'fa-solid fa-circle-check text-emerald-400';
-                    if (statusText) statusText.textContent = 'Campaign Completed Successfully!';
-                    alert(`Campaign Completed!\nSent: ${sentCount}\nFailed: ${failedCount}`);
+            } catch (error) {
+                if (statusText) {
+                    statusText.textContent = `त्रुटि: ${error.message}`;
+                    statusText.className = 'text-danger';
                 }
-
-            } catch (err) {
-                console.error(err);
-                alert('An error occurred during sending.');
             } finally {
-                isSending = false;
-                finishSendingUI();
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> प्राथमिक इनबॉक्स में भेजें';
+                if (statusSpinner) statusSpinner.classList.add('hidden');
             }
         });
     }
 
-    if (stopBtn) {
-        stopBtn.addEventListener('click', async () => {
-            stopRequested = true;
-            if (statusIcon) statusIcon.className = 'fa-solid fa-spinner fa-spin text-amber-400';
-            if (statusText) statusText.textContent = 'Stopping process...';
-            stopBtn.disabled = true;
-
-            try {
-                await fetch('/api/stop', { method: 'POST' });
-            } catch (e) {
-                console.error("Stop error", e);
+    function handleSSEMessage(data) {
+        if (data.type === 'start') {
+            if (statTotal) statTotal.textContent = data.total;
+            if (statSent) statSent.textContent = '0';
+            if (statFailed) statFailed.textContent = '0';
+            if (statRemaining) statRemaining.textContent = data.total;
+            if (progressBar) progressBar.style.width = '0%';
+            if (statusText) {
+                statusText.textContent = 'भेजा जा रहा है... (1-by-1 Direct Inboxing)';
+                statusText.className = 'text-primary';
             }
-        });
+        } 
+        else if (data.type === 'progress') {
+            if (statSent) statSent.textContent = data.sentCount;
+            if (statFailed) statFailed.textContent = data.failCount;
+            const remaining = data.total - (data.sentCount + data.failCount);
+            if (statRemaining) statRemaining.textContent = remaining;
+
+            const percent = Math.round(((data.sentCount + data.failCount) / data.total) * 100);
+            if (progressBar) progressBar.style.width = `${percent}%`;
+
+            if (statusText) {
+                if (data.status === 'success') {
+                    statusText.textContent = `[${data.index}/${data.total}] इनबॉक्स ➔ ${data.recipient}`;
+                    statusText.className = 'text-success';
+                } else {
+                    statusText.textContent = `[${data.index}/${data.total}] विफल ➔ ${data.recipient}`;
+                    statusText.className = 'text-danger';
+                }
+            }
+        } 
+        else if (data.type === 'complete') {
+            if (statusText) {
+                statusText.textContent = `प्रक्रिया पूर्ण! कुल: ${data.total}, सफल: ${data.sentCount}, विफल: ${data.failCount}`;
+                statusText.className = 'text-success';
+            }
+            if (progressBar) progressBar.style.width = '100%';
+        } 
+        else if (data.type === 'error') {
+            if (statusText) {
+                statusText.textContent = data.message;
+                statusText.className = 'text-danger';
+            }
+        }
     }
 });
