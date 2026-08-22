@@ -12,36 +12,10 @@
 </head>
 <body>
 
-    <!-- PASSWORD GATE -->
-    <div id="password-gate" class="password-gate">
-        <div class="gate-card">
-            <div class="gate-icon">
-                <i class="fa-solid fa-lock"></i>
-            </div>
-            <h2>सुरक्षित प्रवेश</h2>
-            <p>जारी रखने के लिए एक्सेस कोड दर्ज करें</p>
-            <div id="gate-error" class="gate-error hidden">
-                <i class="fa-solid fa-circle-exclamation"></i>
-                <span id="gate-error-text">गलत पासकोड!</span>
-            </div>
-            <form id="gate-form">
-                <div class="form-group">
-                    <input type="password" id="gate-password" placeholder="पासकोड दर्ज करें..." required autocomplete="off">
-                </div>
-                <button type="submit" class="btn btn-primary btn-block">
-                    <i class="fa-solid fa-key"></i> अनलॉक करें
-                </button>
-            </form>
-        </div>
-    </div>
-
-    <!-- APP CONTAINER -->
+    <!-- APP CONTAINER (सीधे ओपन होगा) -->
     <div class="app-container">
         <header class="app-header">
             <h1><i class="fa-solid fa-paper-plane"></i> Inbox Direct Mailer</h1>
-            <button id="logout-btn" class="logout-header-btn">
-                <i class="fa-solid fa-right-from-bracket"></i> लॉग आउट
-            </button>
         </header>
 
         <div class="dashboard-grid">
