@@ -13,37 +13,43 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 
-// In-memory active flag (Works for single instance & local execution)
-let activeStopSignal = false;
+const globalSession = { stopRequested: false };
+const poolMap = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. TRANSPORTER FACTORY
+   1. SECURE GMAIL SMTP TRANSPORTER (6 Parallel Pool Connections)
    ========================================================================== */
-function createTransporter(email, appPassword) {
+function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // TLS via STARTTLS
-    requireTLS: true,
-    auth: {
-      user: cleanEmail,
-      pass: appPassword
-    },
-    pool: true,
-    maxConnections: 6,
-    maxMessages: 100,
-    rateDelta: 1000,
-    rateLimit: 5
-  });
+  const key = `port587_${cleanEmail}_${appPassword}`;
+
+  if (!poolMap.has(key)) {
+    const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false, // TLS via STARTTLS
+      requireTLS: true,
+      auth: {
+        user: cleanEmail,
+        pass: appPassword
+      },
+      pool: true,
+      maxConnections: 6, // 6 Concurrent SMTP Sockets
+      maxMessages: 100
+    });
+
+    poolMap.set(key, transporter);
+  }
+
+  return poolMap.get(key);
 }
 
 /* ==========================================================================
-   2. RECIPIENT PARSER, SPINTAX & INBOX UTILS
+   2. RECIPIENT PARSER, SPINTAX & INBOX DELIVERY ENGINE
    ========================================================================== */
 function generateReferenceCode() {
   const randomHex = crypto.randomBytes(4).toString('hex');
@@ -165,20 +171,17 @@ app.post("/api/verify", async (req, res) => {
     return res.status(400).json({ success: false, message: "Credentials required" });
   }
 
-  const transporter = createTransporter(email, appPassword);
-
   try {
+    const transporter = getPort587Transporter(email, appPassword);
     await transporter.verify();
-    transporter.close();
     return res.json({ success: true, message: "SMTP verified successfully" });
   } catch (error) {
-    transporter.close();
     return res.status(401).json({ success: false, message: "SMTP Auth Failed. Verify App Password." });
   }
 });
 
 /* ==========================================================================
-   4. SSE STREAMING ENGINE
+   4. STREAMING ENGINE (6 Emails Burst via Promise.allSettled)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -196,25 +199,17 @@ app.post('/api/send-stream', async (req, res) => {
 
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || "").replace(/"/g, "").trim();
-  
-  let clientDisconnected = false;
-  activeStopSignal = false;
-
-  req.on('close', () => {
-    clientDisconnected = true;
-  });
+  globalSession.stopRequested = false;
 
   const keepAlivePing = setInterval(() => {
-    if (!clientDisconnected) {
-      res.write(': keep-alive\n\n');
-    }
+    res.write(': keep-alive\n\n');
   }, 3000);
 
-  const transporter = createTransporter(cleanEmail, appPassword);
+  const transporter = getPort587Transporter(email, appPassword);
   const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-    if (clientDisconnected || activeStopSignal) {
+    if (globalSession.stopRequested) {
       res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
       break;
     }
@@ -259,6 +254,7 @@ app.post('/api/send-stream', async (req, res) => {
         return { success: true, recipient: recipient.email, name: recipient.name, ref: refCode };
 
       } catch (err) {
+        console.error(`Send Failure [${recipient.email}]:`, err.message);
         return { success: false, recipient: recipient.email, error: err.message };
       }
     });
@@ -266,33 +262,30 @@ app.post('/api/send-stream', async (req, res) => {
     const results = await Promise.allSettled(sendPromises);
 
     for (const resItem of results) {
-      if (resItem.status === 'fulfilled' && resItem.value.recipient && !clientDisconnected) {
+      if (resItem.status === 'fulfilled' && resItem.value.recipient) {
         res.write(`data: ${JSON.stringify(resItem.value)}\n\n`);
       }
     }
 
-    if (i + BATCH_SIZE < recipients.length && !clientDisconnected && !activeStopSignal) {
-      const batchDelay = Math.floor(1000 + Math.random() * 1000);
+    // Dynamic delay (1.2s - 2.5s) optimized for parallel 6-email burst
+    if (i + BATCH_SIZE < recipients.length) {
+      const batchDelay = Math.floor(1200 + Math.random() * 1300);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
 
   clearInterval(keepAlivePing);
-  transporter.close();
-
-  if (!clientDisconnected) {
-    res.write("data: [DONE]\n\n");
-    res.end();
-  }
+  res.write("data: [DONE]\n\n");
+  res.end();
 });
 
 app.post('/api/stop', (req, res) => {
-  activeStopSignal = true;
-  res.json({ success: true, message: "Sending process stop requested" });
+  globalSession.stopRequested = true;
+  res.json({ success: true, message: "Sending process stopped" });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server active on Port ${PORT}`);
+  console.log(`Server running on Port ${PORT} [6-Email Batch Engine Active]`);
 });
 
 export default app;
