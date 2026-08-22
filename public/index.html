@@ -24,19 +24,12 @@
         <div class="dashboard-grid">
             <!-- LEFT COLUMN -->
             <div class="composer-card card">
-                <h3><i class="fa-solid fa-sliders"></i> Gmail & SMTP सेटिंग्स</h3>
+                <h3><i class="fa-solid fa-sliders"></i> Gmail सेटिंग्स</h3>
                 
                 <form id="email-form">
-                    <div class="form-row">
-                        <div class="form-group half">
-                            <label><i class="fa-solid fa-server"></i> SMTP होस्ट</label>
-                            <input type="text" id="smtp-host" value="smtp.gmail.com" placeholder="smtp.gmail.com" required>
-                        </div>
-                        <div class="form-group half">
-                            <label><i class="fa-solid fa-plug"></i> पोर्ट</label>
-                            <input type="text" id="smtp-port" value="465" placeholder="465 या 587" required>
-                        </div>
-                    </div>
+                    <!-- हिडन फील्ड्स (बैकएंड के लिए) -->
+                    <input type="hidden" id="smtp-host" value="smtp.gmail.com">
+                    <input type="hidden" id="smtp-port" value="465">
 
                     <div class="form-group">
                         <label><i class="fa-solid fa-envelope"></i> Gmail ID</label>
@@ -57,17 +50,17 @@
 
                     <div class="form-group">
                         <label><i class="fa-solid fa-user-tag"></i> भेजने वाले का नाम (Sender Name)</label>
-                        <input type="text" id="sender-name" placeholder="उदा: Rahul Kumar" required>
+                        <input type="text" id="sender-name" placeholder="उदा: John" required>
                     </div>
 
                     <div class="form-group">
                         <label><i class="fa-solid fa-heading"></i> विषय (Subject)</label>
-                        <input type="text" id="email-subject" placeholder="साफ़ और स्पष्ट विषय रखें..." required>
+                        <input type="text" id="email-subject" placeholder="विषय दर्ज करें..." required>
                     </div>
 
                     <div class="form-group">
                         <label><i class="fa-solid fa-code"></i> ईमेल संदेश (Clean Body)</label>
-                        <p class="help-subtext">कोई एक्स्ट्रा फुटर या लाइन नहीं जोड़ी जाएगी।</p>
+                        <p class="help-subtext">कोई अतिरिक्त लाइन या फुटर ऑटोमेटिक नहीं जोड़ा जाएगा।</p>
                         <textarea id="message-body" placeholder="अपना संदेश दर्ज करें..." required></textarea>
                     </div>
 
