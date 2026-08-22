@@ -27,23 +27,15 @@
                 <h3><i class="fa-solid fa-sliders"></i> Gmail सेटिंग्स</h3>
                 
                 <form id="email-form">
-                    <!-- हिडन SMTP फ़ील्ड्स -->
+                    <!-- हिडन फील्ड्स (बैकएंड के लिए) -->
                     <input type="hidden" id="smtp-host" value="smtp.gmail.com">
                     <input type="hidden" id="smtp-port" value="465">
 
-                    <!-- 1. Sender Name -->
-                    <div class="form-group">
-                        <label><i class="fa-solid fa-user-tag"></i> भेजने वाले का नाम (Sender Name)</label>
-                        <input type="text" id="sender-name" placeholder="उदा: John" required>
-                    </div>
-
-                    <!-- 2. Gmail ID -->
                     <div class="form-group">
                         <label><i class="fa-solid fa-envelope"></i> Gmail ID</label>
                         <input type="email" id="smtp-user" placeholder="your-email@gmail.com" required>
                     </div>
 
-                    <!-- 3. Gmail App Password -->
                     <div class="form-group">
                         <label><i class="fa-solid fa-key"></i> Gmail App Password (16-digit)</label>
                         <div class="password-wrapper">
@@ -54,13 +46,18 @@
                         </div>
                     </div>
 
-                    <!-- 4. Subject -->
+                    <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color);">
+
+                    <div class="form-group">
+                        <label><i class="fa-solid fa-user-tag"></i> भेजने वाले का नाम (Sender Name)</label>
+                        <input type="text" id="sender-name" placeholder="उदा: John" required>
+                    </div>
+
                     <div class="form-group">
                         <label><i class="fa-solid fa-heading"></i> विषय (Subject)</label>
                         <input type="text" id="email-subject" placeholder="विषय दर्ज करें..." required>
                     </div>
 
-                    <!-- 5. Email Message Body -->
                     <div class="form-group">
                         <label><i class="fa-solid fa-code"></i> ईमेल संदेश (Clean Body)</label>
                         <p class="help-subtext">कोई अतिरिक्त लाइन या फुटर ऑटोमेटिक नहीं जोड़ा जाएगा।</p>
