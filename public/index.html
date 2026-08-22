@@ -12,38 +12,41 @@
 </head>
 <body>
 
-    <!-- APP CONTAINER (सीधे ओपन होगा) -->
+    <!-- APP CONTAINER -->
     <div class="app-container">
         <header class="app-header">
             <h1><i class="fa-solid fa-paper-plane"></i> Inbox Direct Mailer</h1>
+            <button id="logout-btn" class="logout-header-btn">
+                <i class="fa-solid fa-right-from-bracket"></i> <span id="logout-text">लॉग आउट</span>
+            </button>
         </header>
 
         <div class="dashboard-grid">
             <!-- LEFT COLUMN -->
             <div class="composer-card card">
-                <h3><i class="fa-solid fa-sliders"></i> SMTP एवं ईमेल सेटिंग्स</h3>
+                <h3><i class="fa-solid fa-sliders"></i> Gmail & SMTP सेटिंग्स</h3>
                 
                 <form id="email-form">
                     <div class="form-row">
                         <div class="form-group half">
                             <label><i class="fa-solid fa-server"></i> SMTP होस्ट</label>
-                            <input type="text" id="smtp-host" placeholder="smtp.gmail.com" required>
+                            <input type="text" id="smtp-host" value="smtp.gmail.com" placeholder="smtp.gmail.com" required>
                         </div>
                         <div class="form-group half">
                             <label><i class="fa-solid fa-plug"></i> पोर्ट</label>
-                            <input type="text" id="smtp-port" placeholder="465 या 587" value="465" required>
+                            <input type="text" id="smtp-port" value="465" placeholder="465 या 587" required>
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-envelope"></i> SMTP ईमेल (User)</label>
+                        <label><i class="fa-solid fa-envelope"></i> Gmail ID</label>
                         <input type="email" id="smtp-user" placeholder="your-email@gmail.com" required>
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-key"></i> App Password</label>
+                        <label><i class="fa-solid fa-key"></i> Gmail App Password (16-digit)</label>
                         <div class="password-wrapper">
-                            <input type="password" id="smtp-pass" placeholder="App Password दर्ज करें" required>
+                            <input type="password" id="smtp-pass" placeholder="xxxx xxxx xxxx xxxx" required>
                             <button type="button" id="toggle-pass" class="icon-button">
                                 <i class="fa-solid fa-eye"></i>
                             </button>
@@ -63,13 +66,13 @@
                     </div>
 
                     <div class="form-group">
-                        <label><i class="fa-solid fa-code"></i> ईमेल संदेश Body</label>
-                        <p class="help-subtext">कोई अतिरिक्त लाइन या फुटर ऑटोमेटिक नहीं जोड़ा जाएगा।</p>
-                        <textarea id="message-body" placeholder="अपना संदेश यहाँ लिखें..." required></textarea>
+                        <label><i class="fa-solid fa-code"></i> ईमेल संदेश (Clean Body)</label>
+                        <p class="help-subtext">कोई एक्स्ट्रा फुटर या लाइन नहीं जोड़ी जाएगी।</p>
+                        <textarea id="message-body" placeholder="अपना संदेश दर्ज करें..." required></textarea>
                     </div>
 
                     <button type="submit" id="send-btn" class="btn btn-primary btn-block">
-                        <i class="fa-solid fa-paper-plane"></i> प्राथमिक इनबॉक्स में भेजें
+                        <i class="fa-solid fa-paper-plane"></i> इनबॉक्स में भेजें
                     </button>
                 </form>
             </div>
@@ -81,7 +84,7 @@
                         <h3><i class="fa-solid fa-users"></i> प्राप्तकर्ता (Recipients)</h3>
                         <span id="recipient-count" class="badge">0 ईमेल</span>
                     </div>
-                    <p class="help-subtext">प्रति पंक्ति एक ईमेल दर्ज करें (1 Email Loop Mode)</p>
+                    <p class="help-subtext">प्रति पंक्ति 1 ईमेल (1 Email per Request Mode)</p>
                     <textarea id="recipients-input" placeholder="email1@gmail.com&#10;email2@yahoo.com" required></textarea>
                 </div>
 
