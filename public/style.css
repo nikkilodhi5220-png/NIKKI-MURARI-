@@ -70,15 +70,13 @@ body {
     border: 1px solid rgba(239, 68, 68, 0.2);
     color: var(--danger-color);
     background-color: rgba(239, 68, 68, 0.05);
-    user-select: none;
-    transition: all 0.2s;
     cursor: pointer;
+    transition: all 0.2s;
 }
 
 .logout-header-btn:hover {
     background-color: var(--danger-color);
     color: white;
-    border-color: var(--danger-color);
 }
 
 @media (max-width: 768px) {
@@ -103,28 +101,6 @@ body {
     backdrop-filter: blur(10px);
 }
 
-#login-section {
-    max-width: 450px;
-    margin: 0 auto;
-}
-
-.card-header {
-    text-align: center;
-    margin-bottom: 1.5rem;
-}
-
-.card-header h2 {
-    font-size: 1.35rem;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-}
-
-.card-header p {
-    color: var(--text-muted);
-    font-size: 0.9rem;
-}
-
-/* Forms */
 .form-group {
     margin-bottom: 0.85rem;
 }
@@ -163,7 +139,6 @@ textarea:focus {
     box-shadow: 0 0 0 3px var(--input-focus);
 }
 
-/* COMPACT TEXTAREA SIZES */
 #message-body {
     resize: vertical;
     min-height: 110px !important;
@@ -198,14 +173,12 @@ textarea:focus {
     cursor: pointer;
     padding: 0.4rem;
     border-radius: 50%;
-    transition: color 0.2s;
 }
 
 .icon-button:hover {
     color: var(--primary-color);
 }
 
-/* Buttons */
 .btn {
     display: inline-flex;
     align-items: center;
@@ -237,78 +210,10 @@ textarea:focus {
     box-shadow: var(--shadow-md);
 }
 
-.btn-success {
-    background: linear-gradient(to right, var(--success-color), #059669);
-    color: white;
-}
-
-.btn-success:hover {
-    background: linear-gradient(to right, #059669, #047857);
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-md);
-}
-
-.btn-danger {
-    background: linear-gradient(to right, var(--danger-color), #dc2626);
-    color: white;
-}
-
-.btn-danger:hover {
-    background: linear-gradient(to right, #dc2626, #b91c1c);
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-md);
-}
-
-.btn-outline {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    color: var(--text-main);
-}
-
-.btn-outline:hover {
-    background: var(--bg-color);
-    border-color: var(--text-muted);
-}
-
-.btn-sm {
-    padding: 0.35rem 0.65rem;
-    font-size: 0.8rem;
-}
-
-/* Error/Help state */
-.error-message {
-    background-color: #fef2f2;
-    color: var(--danger-color);
-    padding: 0.6rem;
-    border-radius: var(--radius-md);
-    font-size: 0.85rem;
-    margin-bottom: 0.85rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    border-left: 3px solid var(--danger-color);
-}
-
-/* Utilities */
 .hidden {
     display: none !important;
 }
 
-.fade-in {
-    animation: fadeIn 0.4s ease-out forwards;
-    opacity: 0;
-}
-
-.delay-1 { animation-delay: 0.1s; }
-.delay-2 { animation-delay: 0.2s; }
-.delay-3 { animation-delay: 0.3s; }
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* Dashboard Specific UI */
 .dashboard-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -320,11 +225,6 @@ textarea:focus {
     .dashboard-grid {
         grid-template-columns: 1fr;
     }
-}
-
-.composer-card {
-    display: flex;
-    flex-direction: column;
 }
 
 .composer-card h3, .recipients-card h3, .progress-card h3 {
@@ -351,11 +251,6 @@ textarea:focus {
     gap: 1.25rem;
 }
 
-.recipients-card {
-    display: flex;
-    flex-direction: column;
-}
-
 .card-header-flex {
     display: flex;
     justify-content: space-between;
@@ -366,7 +261,6 @@ textarea:focus {
     font-size: 0.8rem;
     color: var(--text-muted);
     margin-bottom: 0.4rem;
-    margin-top: -0.3rem;
 }
 
 .badge {
@@ -376,11 +270,6 @@ textarea:focus {
     border-radius: 99px;
     font-size: 0.75rem;
     font-weight: 600;
-}
-
-/* PROGRESS MONITOR COMPACT HORIZONTAL ROW */
-.progress-card {
-    padding: 1.25rem !important;
 }
 
 .stats-grid {
@@ -406,13 +295,11 @@ textarea:focus {
     color: var(--text-muted);
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
 .stat-value {
     font-size: 1.15rem !important;
     font-weight: 700;
-    margin-top: 0.1rem;
 }
 
 .neutral .stat-value { color: var(--primary-color); }
@@ -439,7 +326,6 @@ textarea:focus {
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    margin-bottom: 0.85rem !important;
     font-size: 0.85rem !important;
     font-weight: 500;
 }
@@ -449,17 +335,7 @@ textarea:focus {
 .text-success { color: var(--success-color); }
 .text-danger { color: var(--danger-color); }
 
-.control-buttons {
-    display: flex;
-    gap: 0.75rem;
-}
-
-.flex-1 {
-    flex: 1;
-}
-
-/* ==================== PASSWORD GATE ==================== */
-
+/* PASSWORD GATE */
 .password-gate {
     position: fixed;
     inset: 0;
@@ -468,21 +344,11 @@ textarea:focus {
     align-items: center;
     justify-content: center;
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #312e81 100%);
-    background-size: 400% 400%;
-    animation: gradientShift 8s ease infinite;
-}
-
-@keyframes gradientShift {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
 }
 
 .gate-card {
-    position: relative;
     background: rgba(255, 255, 255, 0.05);
     backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 20px;
     padding: 2.5rem 2rem;
@@ -496,7 +362,6 @@ textarea:focus {
     color: #f1f5f9;
     font-size: 1.5rem;
     font-weight: 700;
-    margin-bottom: 0.25rem;
 }
 
 .gate-card p {
@@ -518,41 +383,22 @@ textarea:focus {
     color: white;
 }
 
-.gate-card .form-group {
-    margin-bottom: 1rem;
-}
-
 .gate-card input[type="password"] {
     background: rgba(255, 255, 255, 0.07);
     border: 1px solid rgba(255, 255, 255, 0.15);
     color: #f1f5f9;
-    font-size: 0.95rem;
-    padding: 0.75rem 1rem;
-    border-radius: 10px;
-}
-
-.gate-card .btn-primary {
-    background: linear-gradient(135deg, #6366f1, #3b82f6);
-    padding: 0.75rem 1.25rem;
-    font-size: 1rem;
-    border-radius: 10px;
-    margin-top: 0.5rem;
 }
 
 .gate-error {
     background: rgba(239, 68, 68, 0.12);
     border: 1px solid rgba(239, 68, 68, 0.25);
     color: #fca5a5;
-    padding: 0.5rem 0.75rem;
+    padding: 0.5rem;
     border-radius: 8px;
     font-size: 0.85rem;
     margin-bottom: 0.85rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
 }
 
-/* Gate transition out */
 .password-gate.gate-unlocked {
     animation: gateDissolve 0.5s ease forwards;
 }
@@ -560,18 +406,4 @@ textarea:focus {
 @keyframes gateDissolve {
     0% { opacity: 1; transform: scale(1); }
     100% { opacity: 0; transform: scale(1.05); pointer-events: none; }
-}
-
-/* Custom Toast/Popup */
-.custom-popup {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    z-index: 10000;
-    width: 350px;
-    background: rgba(30, 41, 59, 0.95);
-    backdrop-filter: blur(12px);
-    border-radius: 10px;
-    color: #f8fafc;
-    border: 1px solid rgba(255, 255, 255, 0.08);
 }
