@@ -1,5 +1,36 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // SHOW/HIDE PASSWORD
+    // 🔴 DOUBLE CLICK LOGOUT SYSTEM
+    const logoutBtn = document.getElementById('logout-btn');
+    const logoutText = document.getElementById('logout-text');
+    let logoutClicks = 0;
+    let logoutTimer = null;
+
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', () => {
+            logoutClicks++;
+
+            if (logoutClicks === 1) {
+                if (logoutText) logoutText.textContent = "पुष्टि के लिए पुनः क्लिक करें!";
+                logoutBtn.style.backgroundColor = "var(--danger-color)";
+                logoutBtn.style.color = "#ffffff";
+
+                // 3 सेकंड के अंदर दूसरा क्लिक न होने पर रीसेट हो जाएगा
+                logoutTimer = setTimeout(() => {
+                    logoutClicks = 0;
+                    if (logoutText) logoutText.textContent = "लॉग आउट";
+                    logoutBtn.style.backgroundColor = "";
+                    logoutBtn.style.color = "";
+                }, 3000);
+            } else if (logoutClicks === 2) {
+                clearTimeout(logoutTimer);
+                sessionStorage.clear();
+                localStorage.clear();
+                window.location.reload();
+            }
+        });
+    }
+
+    // TOGGLE PASSWORD VISIBILITY
     const togglePassBtn = document.getElementById('toggle-pass');
     const smtpPassInput = document.getElementById('smtp-pass');
     
@@ -15,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // RECIPIENT COUNT COUNTER
+    // LIVE RECIPIENT COUNT
     const recipientsInput = document.getElementById('recipients-input');
     const recipientCountBadge = document.getElementById('recipient-count');
 
@@ -29,7 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // EMAIL SENDING & SSE LOGIC
+    // EMAIL SUBMIT & STREAMING
     const emailForm = document.getElementById('email-form');
     const sendBtn = document.getElementById('send-btn');
     const progressBar = document.getElementById('progress-bar');
@@ -51,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 .filter(e => e.length > 0);
 
             if (recipientsArr.length === 0) {
-                alert('कृपया कम से कम एक ईमेल दर्ज करें!');
+                alert('कृपया कम से कम एक प्राप्तकर्ता ईमेल दर्ज करें!');
                 return;
             }
 
@@ -71,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sendBtn.disabled = true;
             sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> भेजा जा रहा है...';
             if (statusSpinner) statusSpinner.classList.remove('hidden');
-            if (statusText) statusText.textContent = 'कनेक्ट किया जा रहा है...';
+            if (statusText) statusText.textContent = 'Gmail SMTP कनेक्ट किया जा रहा है...';
 
             try {
                 const response = await fetch('/api/send-emails', {
@@ -106,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } finally {
                 sendBtn.disabled = false;
-                sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> प्राथमिक इनबॉक्स में भेजें';
+                sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> इनबॉक्स में भेजें';
                 if (statusSpinner) statusSpinner.classList.add('hidden');
             }
         });
@@ -120,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (statRemaining) statRemaining.textContent = data.total;
             if (progressBar) progressBar.style.width = '0%';
             if (statusText) {
-                statusText.textContent = 'भेजा जा रहा है... (1-by-1 Direct Inboxing)';
+                statusText.textContent = '1-by-1 इनबॉक्स डिलीवरी जारी है...';
                 statusText.className = 'text-primary';
             }
         } 
@@ -145,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } 
         else if (data.type === 'complete') {
             if (statusText) {
-                statusText.textContent = `प्रक्रिया पूर्ण! कुल: ${data.total}, सफल: ${data.sentCount}, विफल: ${data.failCount}`;
+                statusText.textContent = `सभी ईमेल सफलतापूर्वक प्रोसेस हो चुके हैं!`;
                 statusText.className = 'text-success';
             }
             if (progressBar) progressBar.style.width = '100%';
