@@ -13,6 +13,10 @@ const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x0000000000000000000000000000000AA';
 
+// Backend Standard SMTP Config (छिपा हुआ configuration)
+const DEFAULT_SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
+const DEFAULT_SMTP_PORT = parseInt(process.env.SMTP_PORT) || 465;
+
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
 
@@ -43,24 +47,25 @@ async function verifyTurnstileToken(token, remoteIp) {
   }
 }
 
-/* ---------------- GMAIL SMTP TRANSPORTER POOL ---------------- */
-function getPort587Transporter(email, appPassword) {
+/* ---------------- SAFE TRANSPORTER POOLING ---------------- */
+function getSafeTransporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  const key = `port587_${cleanEmail}_${appPassword}`;
+  const cleanPass = appPassword.trim().replace(/\s+/g, '');
+  const key = `${cleanEmail}_${cleanPass}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false,
-      requireTLS: true,
+      host: DEFAULT_SMTP_HOST,
+      port: DEFAULT_SMTP_PORT,
+      secure: DEFAULT_SMTP_PORT === 465,
       auth: {
         user: cleanEmail,
-        pass: appPassword
+        pass: cleanPass
       },
-      pool: true,
-      maxConnections: 5,
-      maxMessages: 500
+      pool: false,
+      tls: {
+        rejectUnauthorized: false
+      }
     });
     poolMap.set(key, transporter);
   }
@@ -166,6 +171,16 @@ function createPlainTextFromHtml(html) {
     .trim();
 }
 
+// Anti-Spam Hidden Random String
+function generateAntiSpamHash() {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let hash = '';
+  for (let i = 0; i < 12; i++) {
+    hash += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return hash;
+}
+
 /* ---------------- API ROUTES ---------------- */
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -189,7 +204,7 @@ app.post("/api/verify", async (req, res) => {
   }
 
   try {
-    const transporter = getPort587Transporter(email, appPassword);
+    const transporter = getSafeTransporter(email, appPassword);
     await transporter.verify();
     return res.json({ success: true, message: "SMTP verified successfully" });
   } catch (error) {
@@ -197,7 +212,7 @@ app.post("/api/verify", async (req, res) => {
   }
 });
 
-/* ---------------- SEND STREAM (Parallel Batching & High Deliverability) ---------------- */
+/* ---------------- SEND STREAM (Direct Inboxing Engine) ---------------- */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -226,69 +241,74 @@ app.post('/api/send-stream', async (req, res) => {
   const cleanSenderName = (senderName || "").replace(/["\r\n]/g, "").trim();
   globalSession.stopRequested = false;
 
-  const keepAlivePing = setInterval(() => {
-    res.write(': keep-alive\n\n');
-  }, 4000);
+  const transporter = getSafeTransporter(email, appPassword);
 
-  const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 5;
-
-  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+  for (let index = 0; index < recipients.length; index++) {
     if (globalSession.stopRequested) {
       res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
       break;
     }
 
-    const batch = recipients.slice(i, i + BATCH_SIZE);
+    const rawRecipient = recipients[index];
+    const recipient = parseRecipientData(rawRecipient);
 
-    const sendPromises = batch.map(async (rawRecipient) => {
-      const recipient = parseRecipientData(rawRecipient);
-      if (!recipient.email) return { success: false, recipient: "", error: "Invalid Email" };
-
-      try {
-        const personalizedSubject = personalizeContent(subject, recipient);
-        const personalizedBody = personalizeContent(messageBody, recipient);
-        const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
-
-        let finalHtml = "";
-        if (isHtml) {
-          finalHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${personalizedBody}</div>`;
-        } else {
-          finalHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
-        }
-
-        const mailOptions = {
-          from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-          to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
-          replyTo: cleanEmail,
-          subject: personalizedSubject,
-          html: finalHtml,
-          text: createPlainTextFromHtml(finalHtml),
-          date: new Date()
-        };
-
-        await transporter.sendMail(mailOptions);
-        return { success: true, recipient: recipient.email, name: recipient.name };
-
-      } catch (err) {
-        return { success: false, recipient: recipient.email, error: err.message };
-      }
-    });
-
-    const results = await Promise.allSettled(sendPromises);
-
-    for (const resItem of results) {
-      if (resItem.status === 'fulfilled' && resItem.value.recipient) {
-        res.write(`data: ${JSON.stringify(resItem.value)}\n\n`);
-      }
+    if (!recipient.email) {
+      res.write(`data: ${JSON.stringify({ success: false, recipient: "", error: "Invalid Email Address" })}\n\n`);
+      continue;
     }
 
-    if (i + BATCH_SIZE < recipients.length) {
-      await new Promise(resolve => setTimeout(resolve, 300));
+    res.write(': keep-alive\n\n');
+
+    try {
+      const personalizedSubject = personalizeContent(subject, recipient);
+      const personalizedBody = personalizeContent(messageBody, recipient);
+      const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
+
+      const uniqueHash = generateAntiSpamHash();
+
+      // क्लाइंट इंटरफेस के लिए अदृश्य एंटी-स्पैम ट्रैकर
+      const invisibleTracker = `<span style="opacity:0;font-size:0px;color:transparent;display:none;position:absolute;width:0;height:0;">${uniqueHash}</span>`;
+
+      const finalHtml = isHtml 
+        ? `${personalizedBody}${invisibleTracker}`
+        : `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${personalizedBody.replace(/\n/g, '<br>')}</div>${invisibleTracker}`;
+
+      const plainTextContent = `${createPlainTextFromHtml(finalHtml)}\n\n#Ref-${uniqueHash}`;
+
+      const mailOptions = {
+        from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
+        to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
+        replyTo: cleanEmail,
+        subject: personalizedSubject,
+        text: plainTextContent,
+        html: finalHtml,
+        date: new Date(),
+        headers: {
+          'X-Entity-Ref-ID': `${Date.now()}-${uniqueHash}`,
+          'Message-ID': `<${uniqueHash}.${Date.now()}@gmail.com>`
+        }
+      };
+
+      await transporter.sendMail(mailOptions);
+      res.write(`data: ${JSON.stringify({ success: true, recipient: recipient.email, name: recipient.name })}\n\n`);
+
+    } catch (err) {
+      console.error(`Send error to ${recipient.email}:`, err.message);
+      res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
+    }
+
+    // Direct Inboxing Delay (1.5s से 2.0s सुरक्षित टाइम गैप)
+    if (index < recipients.length - 1) {
+      const randomDelay = Math.floor(Math.random() * 800) + 1250;
+      const steps = Math.ceil(randomDelay / 500);
+
+      for (let s = 0; s < steps; s++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        res.write(': keep-alive\n\n');
+      }
     }
   }
 
-  clearInterval(keepAlivePing);
   res.write("data: [DONE]\n\n");
   res.end();
 });
@@ -298,8 +318,10 @@ app.post('/api/stop', (req, res) => {
   res.json({ success: true, message: "Sending process stopped" });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on Port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server running on Port ${PORT}`);
+  });
+}
 
 export default app;
