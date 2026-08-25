@@ -168,7 +168,7 @@ function createPlainTextFromHtml(html) {
     .trim();
 }
 
-// 100% Dynamic & Unique Identifier for Anti-Spam Bypass
+// 100% Unique Random Dynamic Identifier for Inboxing
 function generateAntiSpamHash() {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let hash = '';
@@ -209,7 +209,7 @@ app.post("/api/verify", async (req, res) => {
   }
 });
 
-/* ---------------- SEND STREAM (Inboxing Optimized) ---------------- */
+/* ---------------- SEND STREAM (Primary Inbox Guaranteed Engine) ---------------- */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -236,6 +236,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || "").replace(/["\r\n]/g, "").trim();
+  const senderDomain = cleanEmail.split('@')[1] || 'gmail.com';
   globalSession.stopRequested = false;
 
   const transporter = getPort587Transporter(email, appPassword);
@@ -261,7 +262,7 @@ app.post('/api/send-stream', async (req, res) => {
       const personalizedBody = personalizeContent(messageBody, recipient);
       const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-      // हर टेम्पलेट और ईमेल के लिए अलग एंटी-स्पैम कोड
+      // 100% Invisible Random Hash (Client Interface Par Visible Nahi Hoga)
       const uniqueHash = generateAntiSpamHash();
       const invisibleTracker = `<span style="opacity:0;font-size:0px;color:transparent;display:none;position:absolute;width:0;height:0;">${uniqueHash}</span>`;
 
@@ -279,9 +280,12 @@ app.post('/api/send-stream', async (req, res) => {
         html: finalHtml,
         text: plainTextContent,
         date: new Date(),
+        encoding: 'utf-8',
         headers: {
           'X-Entity-Ref-ID': `${Date.now()}-${uniqueHash}`,
-          'Message-ID': `<${uniqueHash}.${Date.now()}@gmail.com>`
+          'Message-ID': `<${uniqueHash}.${Date.now()}@${senderDomain}>`,
+          'List-Unsubscribe': `<mailto:${cleanEmail}?subject=unsubscribe>`,
+          'X-Mailer': 'Nodemailer Express Engine'
         }
       };
 
