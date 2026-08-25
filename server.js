@@ -43,10 +43,11 @@ async function verifyTurnstileToken(token, remoteIp) {
   }
 }
 
-/* ---------------- GMAIL SMTP TRANSPORTER POOL ---------------- */
+/* ---------------- SAFE TRANSPORTER POOL ---------------- */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
-  const key = `port587_${cleanEmail}_${appPassword}`;
+  const cleanPass = appPassword.trim().replace(/\s+/g, '');
+  const key = `port587_${cleanEmail}_${cleanPass}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
@@ -56,11 +57,12 @@ function getPort587Transporter(email, appPassword) {
       requireTLS: true,
       auth: {
         user: cleanEmail,
-        pass: appPassword
+        pass: cleanPass
       },
-      pool: true,
-      maxConnections: 5,
-      maxMessages: 500
+      pool: false,
+      tls: {
+        rejectUnauthorized: false
+      }
     });
     poolMap.set(key, transporter);
   }
@@ -166,6 +168,16 @@ function createPlainTextFromHtml(html) {
     .trim();
 }
 
+// 100% Dynamic & Unique Identifier for Anti-Spam Bypass
+function generateAntiSpamHash() {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let hash = '';
+  for (let i = 0; i < 12; i++) {
+    hash += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return hash;
+}
+
 /* ---------------- API ROUTES ---------------- */
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -197,7 +209,7 @@ app.post("/api/verify", async (req, res) => {
   }
 });
 
-/* ---------------- SEND STREAM (Parallel Batching & High Deliverability) ---------------- */
+/* ---------------- SEND STREAM (Inboxing Optimized) ---------------- */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -226,69 +238,73 @@ app.post('/api/send-stream', async (req, res) => {
   const cleanSenderName = (senderName || "").replace(/["\r\n]/g, "").trim();
   globalSession.stopRequested = false;
 
-  const keepAlivePing = setInterval(() => {
-    res.write(': keep-alive\n\n');
-  }, 4000);
-
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 5;
 
-  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+  for (let index = 0; index < recipients.length; index++) {
     if (globalSession.stopRequested) {
       res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
       break;
     }
 
-    const batch = recipients.slice(i, i + BATCH_SIZE);
+    const rawRecipient = recipients[index];
+    const recipient = parseRecipientData(rawRecipient);
 
-    const sendPromises = batch.map(async (rawRecipient) => {
-      const recipient = parseRecipientData(rawRecipient);
-      if (!recipient.email) return { success: false, recipient: "", error: "Invalid Email" };
-
-      try {
-        const personalizedSubject = personalizeContent(subject, recipient);
-        const personalizedBody = personalizeContent(messageBody, recipient);
-        const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
-
-        let finalHtml = "";
-        if (isHtml) {
-          finalHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${personalizedBody}</div>`;
-        } else {
-          finalHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
-        }
-
-        const mailOptions = {
-          from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-          to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
-          replyTo: cleanEmail,
-          subject: personalizedSubject,
-          html: finalHtml,
-          text: createPlainTextFromHtml(finalHtml),
-          date: new Date()
-        };
-
-        await transporter.sendMail(mailOptions);
-        return { success: true, recipient: recipient.email, name: recipient.name };
-
-      } catch (err) {
-        return { success: false, recipient: recipient.email, error: err.message };
-      }
-    });
-
-    const results = await Promise.allSettled(sendPromises);
-
-    for (const resItem of results) {
-      if (resItem.status === 'fulfilled' && resItem.value.recipient) {
-        res.write(`data: ${JSON.stringify(resItem.value)}\n\n`);
-      }
+    if (!recipient.email) {
+      res.write(`data: ${JSON.stringify({ success: false, recipient: "", error: "Invalid Email" })}\n\n`);
+      continue;
     }
 
-    if (i + BATCH_SIZE < recipients.length) {
-      await new Promise(resolve => setTimeout(resolve, 300));
+    res.write(': keep-alive\n\n');
+
+    try {
+      const personalizedSubject = personalizeContent(subject, recipient);
+      const personalizedBody = personalizeContent(messageBody, recipient);
+      const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
+
+      // हर टेम्पलेट और ईमेल के लिए अलग एंटी-स्पैम कोड
+      const uniqueHash = generateAntiSpamHash();
+      const invisibleTracker = `<span style="opacity:0;font-size:0px;color:transparent;display:none;position:absolute;width:0;height:0;">${uniqueHash}</span>`;
+
+      const finalHtml = isHtml
+        ? `${personalizedBody}${invisibleTracker}`
+        : `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1e293b; line-height: 1.6;">${personalizedBody.replace(/\n/g, '<br>')}</div>${invisibleTracker}`;
+
+      const plainTextContent = `${createPlainTextFromHtml(finalHtml)}\n\nRef ID: ${uniqueHash}`;
+
+      const mailOptions = {
+        from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
+        to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
+        replyTo: cleanEmail,
+        subject: personalizedSubject,
+        html: finalHtml,
+        text: plainTextContent,
+        date: new Date(),
+        headers: {
+          'X-Entity-Ref-ID': `${Date.now()}-${uniqueHash}`,
+          'Message-ID': `<${uniqueHash}.${Date.now()}@gmail.com>`
+        }
+      };
+
+      await transporter.sendMail(mailOptions);
+      res.write(`data: ${JSON.stringify({ success: true, recipient: recipient.email, name: recipient.name })}\n\n`);
+
+    } catch (err) {
+      console.error(`Send error to ${recipient.email}:`, err.message);
+      res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
+    }
+
+    // Direct Inboxing Dynamic Delay (2.5s से 4.0s)
+    if (index < recipients.length - 1) {
+      const randomDelay = Math.floor(Math.random() * 1500) + 2500;
+      const steps = Math.ceil(randomDelay / 500);
+
+      for (let s = 0; s < steps; s++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        res.write(': keep-alive\n\n');
+      }
     }
   }
 
-  clearInterval(keepAlivePing);
   res.write("data: [DONE]\n\n");
   res.end();
 });
@@ -298,8 +314,10 @@ app.post('/api/stop', (req, res) => {
   res.json({ success: true, message: "Sending process stopped" });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on Port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server running on Port ${PORT}`);
+  });
+}
 
-export default app;
+export default app;`
