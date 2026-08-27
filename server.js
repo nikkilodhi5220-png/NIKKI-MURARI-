@@ -49,7 +49,7 @@ async function verifyTurnstileToken(token, remoteIp) {
 }
 
 /* ==========================================================================
-   GMAIL TLS TRANSPORTER POOL (Port 587 STARTTLS)
+   GMAIL TLS TRANSPORTER POOL (Optimized Port 587 STARTTLS)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -67,7 +67,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 5, // 5-batch sync
+      maxConnections: 6, // Dedicated 6 Parallel Sockets
       maxMessages: 50000,
       socketTimeout: 30000,
       connectionTimeout: 30000
@@ -219,7 +219,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   PRIMARY INBOX STREAMING ROUTE (Full RFC Standard & Zero Spam Flags)
+   PRIMARY INBOX STREAMING ROUTE (Parallel 6 Batching - Optimized Delivery)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -250,13 +250,14 @@ app.post('/api/send-stream', async (req, res) => {
   globalSession.stopRequested = false;
 
   const keepAlivePing = setInterval(() => {
-    res.write(': keep-alive\n\n');
+    try { res.write(': keep-alive\n\n'); } catch {}
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 5;
+  
+  // Exact 6 parallel batch execution
+  const BATCH_SIZE = 6;
 
-  // Fully diversified spintax (Protects against Content-Hash Filters)
   const defaultBestSubject = '{quick note regarding your site|website feedback|quick question for you|question about your page}';
   const defaultBestBody = "{Hi {Name},|Hello {Name},|Hey {Name},}\n\n{I noticed your site has a great presentation but isn't showing on the top results.|Your website looks clean, but seems missing from the primary search listings.}\n\n{May I send you a quick report with details?|Would you mind if I shared the screenshot with you?|Can I share the audit reports with you?}";
 
@@ -271,15 +272,11 @@ app.post('/api/send-stream', async (req, res) => {
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    const sendPromises = batch.map(async (rawRecipient, idx) => {
+    const sendPromises = batch.map(async (rawRecipient) => {
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) return { success: false, recipient: '', error: 'Invalid Email' };
 
       try {
-        if (idx > 0) {
-          await new Promise(resolve => setTimeout(resolve, Math.floor(150 + Math.random() * 250)));
-        }
-
         const personalizedSubject = personalizeContent(finalSubjectTemplate, recipient);
         const personalizedBody = personalizeContent(finalBodyTemplate, recipient);
         const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
@@ -288,8 +285,8 @@ app.post('/api/send-stream', async (req, res) => {
           ? personalizedBody
           : personalizedBody.replace(/\n/g, '<br>');
 
-        // Pure standard multi-part message (Gmail Native Human Structure)
-        const formattedHtml = `<div dir="ltr">${cleanBodyText}</div>`;
+        // Primary Inbox HTML wrapper (Clean layout matching desktop clients)
+        const formattedHtml = `<div dir="ltr" style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.5;">${cleanBodyText}</div>`;
         const plainTextFormatted = createCleanPlainText(personalizedBody);
 
         const mailOptions = {
@@ -300,12 +297,16 @@ app.post('/api/send-stream', async (req, res) => {
             to: recipient.email
           },
           replyTo: cleanEmail,
-          date: new Date(), // Standard RFC 2822 timestamp (Fixes automated script flag)
+          date: new Date(),
           subject: personalizedSubject,
           text: plainTextFormatted,
           html: formattedHtml,
-          textEncoding: 'base64',
-          encoding: 'utf-8'
+          textEncoding: 'quoted-printable',
+          encoding: 'utf-8',
+          headers: {
+            'X-Mailer': 'Gmail Standard Core Engine',
+            'List-Unsubscribe': `<mailto:${cleanEmail}?subject=unsubscribe>`
+          }
         };
 
         await transporter.sendMail(mailOptions);
@@ -324,7 +325,7 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // Human delay between 2-email batches (1.2s to 2.0s)
+    // Existing delay (300ms - 450ms) preserved for stable throughput
     if (i + BATCH_SIZE < recipients.length) {
       const safeBatchDelay = Math.floor(300 + Math.random() * 150);
       await new Promise(resolve => setTimeout(resolve, safeBatchDelay));
