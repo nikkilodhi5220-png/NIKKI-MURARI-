@@ -40,7 +40,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // 6 Concurrent Sockets
+      maxConnections: 6, // Exactly 6 concurrent connection sockets
       maxMessages: 100,  // Prevents socket hanging
       socketTimeout: 30000,
       connectionTimeout: 15000
@@ -188,7 +188,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   4. STREAMING ENGINE (6 PARALLEL MAILS WITH ANTI-SPAM TIMINGS)
+   4. STREAMING ENGINE (6 CONCURRENT MAILS WITH OPTIMIZED INBOX TIMINGS)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -214,7 +214,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
 
-  // 1 साथ 6 मेल भेजने के लिए BATCH_SIZE = 6
+  // Exactly 6 emails per batch
   const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -229,9 +229,9 @@ app.post('/api/send-stream', async (req, res) => {
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) return { success: false, recipient: "", error: "Invalid Email" };
 
-      // Micro-Staggering inside batch to prevent socket collisions
+      // Micro-Staggering (20ms delay per thread) to prevent socket collision
       if (index > 0) {
-        await new Promise(r => setTimeout(r, index * 50));
+        await new Promise(r => setTimeout(r, index * 20));
       }
 
       try {
@@ -244,33 +244,23 @@ app.post('/api/send-stream', async (req, res) => {
           ? personalizedBody
           : personalizedBody.replace(/\n/g, '<br>');
 
-        const formattedHtml = `
-          <div style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.6;">
-            ${formattedBodyText}
-            <br><br>
-            <span style="font-size: 11px; color: #999999; display: block; margin-top: 15px;">${refCode}</span>
-          </div>
-        `;
+        const formattedHtml = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.5;">${formattedBodyText}<br><br><span style="font-size: 11px; color: #888888;">${refCode}</span></div>`;
         const plainTextFormatted = createPlainTextFromHtml(personalizedBody) + `\n\n${refCode}`;
-
-        // Unique Message-ID generation for high inbox landing
-        const customMessageId = `<${crypto.randomBytes(12).toString('hex')}@gmail.com>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
+          envelope: {
+            from: cleanEmail,
+            to: recipient.email
+          },
           replyTo: cleanEmail,
           date: new Date(),
           subject: personalizedSubject || 'Notification',
           text: plainTextFormatted,
           html: formattedHtml,
-          messageId: customMessageId,
           textEncoding: 'quoted-printable',
-          encoding: 'utf-8',
-          headers: {
-            'X-Priority': '3',
-            'Importance': 'normal'
-          }
+          encoding: 'utf-8'
         };
 
         await transporter.sendMail(mailOptions);
@@ -289,9 +279,9 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // Natural Pacing Delay (350ms - 600ms) between 6-mail batches
+    // Pacing delay (150ms - 300ms) between 6-mail batches for speed + safety balance
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(350 + Math.random() * 250);
+      const batchDelay = Math.floor(150 + Math.random() * 150);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
