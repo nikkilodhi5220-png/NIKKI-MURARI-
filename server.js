@@ -22,28 +22,28 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. OPTIMIZED TRANSPORTER POOL
+   1. INBOXING-OPTIMIZED TRANSPORTER POOL
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
   const cleanPass = appPassword.replace(/\s+/g, '').trim();
-  const key = `fast_core_${cleanEmail}_${cleanPass}`;
+  const key = `inbox_core_${cleanEmail}_${cleanPass}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
-      secure: false, // TLS via STARTTLS
+      secure: false, // TLS
       requireTLS: true,
       auth: {
         user: cleanEmail,
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 5, // Maximized concurrent sockets
-      maxMessages: 200,
-      socketTimeout: 10000,
-      connectionTimeout: 10000
+      maxConnections: 6, // 6 Concurrent connections for parallel delivery
+      maxMessages: 100,
+      socketTimeout: 15000,
+      connectionTimeout: 15000
     });
 
     poolMap.set(key, transporter);
@@ -53,10 +53,10 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   2. RECIPIENT PARSER, SPINTAX & UTILS
+   2. HELPER & SPINTAX UTILITIES
    ========================================================================== */
 function generateReferenceCode() {
-  return `[ID: ${crypto.randomBytes(3).toString('hex')}]`;
+  return `Ref-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 }
 
 function parseRecipientData(input) {
@@ -128,7 +128,7 @@ function personalizeContent(template, recipient) {
   if (!template) return "";
   let content = parseSpintax(template);
 
-  const displayName = recipient.name || recipient.firstName || "there";
+  const displayName = recipient.name || recipient.firstName || "Customer";
   const displayFirstName = recipient.firstName || displayName;
 
   content = content.replace(/{Name}/gi, displayName);
@@ -188,7 +188,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   4. STREAMING ENGINE (PARALLEL CONCURRENCY)
+   4. STREAMING ENGINE (6 PARALLEL MAILS WITH ANTI-SPAM TIMINGS)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -213,9 +213,9 @@ app.post('/api/send-stream', async (req, res) => {
   }, 3000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  
-  // High-Speed Concurrency Batch Size
-  const BATCH_SIZE = 5;
+
+  // ** 1 साथ 6 मेल भेजने के लिए BATCH_SIZE को 6 सेट किया गया है **
+  const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -229,9 +229,9 @@ app.post('/api/send-stream', async (req, res) => {
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) return { success: false, recipient: "", error: "Invalid Email" };
 
-      // Micro-Staggering inside batch to prevent socket collisions
+      // माइक्रो-स्टैगरिंग: सर्वर पर एक ही मिलीसेकंड में लोड और बोट-ट्रैपिंग से बचने के लिए
       if (index > 0) {
-        await new Promise(r => setTimeout(r, index * 25));
+        await new Promise(r => setTimeout(r, index * 60));
       }
 
       try {
@@ -244,26 +244,30 @@ app.post('/api/send-stream', async (req, res) => {
           ? personalizedBody
           : personalizedBody.replace(/\n/g, '<br>');
 
-        const formattedHtml = `<div dir="ltr" style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.5;">${formattedBodyText}<br><br><span style="font-size: 11px; color: #888888;">${refCode}</span></div>`;
-        const plainTextFormatted = createPlainTextFromHtml(personalizedBody) + `\n\n${refCode}`;
+        // शुद्ध HTML ढांचा (Anti-Spam Clean Template)
+        const formattedHtml = `
+          <div style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.6;">
+            ${formattedBodyText}
+            <br><br>
+            <span style="font-size: 11px; color: #999999; display: block; margin-top: 15px;">Reference: ${refCode}</span>
+          </div>
+        `;
+        const plainTextFormatted = createPlainTextFromHtml(personalizedBody) + `\n\nReference: ${refCode}`;
+
+        // यूनिक Message-ID जेनरेट करना इनबॉक्स के लिए बहुत ज़रूरी है
+        const customMessageId = `<${crypto.randomBytes(12).toString('hex')}@gmail.com>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
-          envelope: {
-            from: cleanEmail,
-            to: recipient.email
-          },
           replyTo: cleanEmail,
-          date: new Date(),
-          subject: personalizedSubject || 'No Subject',
+          subject: personalizedSubject || 'Notification',
           text: plainTextFormatted,
           html: formattedHtml,
-          textEncoding: 'quoted-printable',
-          encoding: 'utf-8',
+          messageId: customMessageId,
           headers: {
-            'X-Mailer': 'NodeMailer-Engine',
-            'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`
+            'X-Priority': '3', // Normal Priority (High/1 सेट करने से Gmail स्पैम में भेजता है)
+            'Importance': 'normal'
           }
         };
 
@@ -283,10 +287,11 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // Pacing delay (100ms - 250ms) between parallel batches
+    // ** इनबॉक्स लैंडिंग के लिए सबसे महत्वपूर्ण (Human-like Batch Delay) **
+    // हर 6 मेल के बाद 350ms से 600ms का रैंडम डिले दिया गया है
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(100 + Math.random() * 150);
-      await new Promise(resolve => setTimeout(resolve, batchDelay));
+      const naturalDelay = Math.floor(350 + Math.random() * 250);
+      await new Promise(resolve => setTimeout(resolve, naturalDelay));
     }
   }
 
@@ -301,7 +306,7 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Optimized Mailer active on port ${PORT}`);
+  console.log(`🚀 Inbox-Optimized Mailer active on port ${PORT}`);
 });
 
 export default app;
