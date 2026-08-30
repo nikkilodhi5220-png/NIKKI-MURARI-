@@ -22,7 +22,7 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ==========================================================================
-   1. INBOXING-OPTIMIZED TRANSPORTER POOL (6 CONCURRENT CONNECTIONS)
+   1. INBOXING-OPTIMIZED TRANSPORTER POOL (6 HIGH-SPEED CONNECTIONS)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -40,10 +40,11 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // Exactly 6 concurrent connection sockets
-      maxMessages: 100,  // Prevents socket hanging
-      socketTimeout: 30000,
-      connectionTimeout: 15000
+      maxConnections: 6, // 6 concurrent sockets limit
+      maxMessages: 150,  // Prevents socket saturation
+      rateLimit: 12,     // Safety cap: max 12 msgs/sec overall across sockets
+      socketTimeout: 20000,
+      connectionTimeout: 10000
     });
 
     poolMap.set(key, transporter);
@@ -188,7 +189,7 @@ app.post("/api/verify", async (req, res) => {
 });
 
 /* ==========================================================================
-   4. STREAMING ENGINE (6 CONCURRENT MAILS WITH OPTIMIZED INBOX TIMINGS)
+   4. STREAMING ENGINE (PARALLEL CONCURRENCY - EXACTLY 6 MAILS BATCH)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -214,7 +215,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
 
-  // Exactly 6 emails per batch
+  // Strictly 6 Concurrent Mails Limit
   const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -229,9 +230,9 @@ app.post('/api/send-stream', async (req, res) => {
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) return { success: false, recipient: "", error: "Invalid Email" };
 
-      // Micro-Staggering (20ms delay per thread) to prevent socket collision
+      // Micro-jitter stagger (30ms to 50ms) to ensure clean connection delivery
       if (index > 0) {
-        await new Promise(r => setTimeout(r, index * 20));
+        await new Promise(r => setTimeout(r, index * (30 + Math.random() * 20)));
       }
 
       try {
@@ -279,9 +280,9 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // Pacing delay (150ms - 300ms) between 6-mail batches for speed + safety balance
+    // Dynamic Pacing Delay (250ms - 400ms) for maintaining speed while ensuring safe landing
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(150 + Math.random() * 150);
+      const batchDelay = Math.floor(250 + Math.random() * 150);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
