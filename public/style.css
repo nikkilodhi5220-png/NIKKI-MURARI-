@@ -193,6 +193,7 @@ textarea:focus {
 @media (max-width: 860px) {
     .dashboard-grid { grid-template-columns: 1fr; }
     .app-header { flex-direction: column; gap: 1rem; }
+    .form-row { flex-direction: column; gap: 0; }
 }
 
 .composer-card {
@@ -221,7 +222,7 @@ textarea:focus {
 }
 
 #message-body {
-    resize: none;
+    resize: vertical;
     flex-grow: 1;
     min-height: 250px;
 }
@@ -260,7 +261,7 @@ textarea:focus {
 }
 
 #recipients-input {
-    resize: none;
+    resize: vertical;
     min-height: 150px;
     font-family: monospace;
     font-size: 0.9rem;
@@ -325,6 +326,12 @@ textarea:focus {
     font-size: 0.95rem;
     font-weight: 500;
 }
+
+.text-muted { color: var(--text-muted); }
+.text-primary { color: var(--primary-color); }
+.text-success { color: var(--success-color); }
+.text-danger { color: var(--danger-color); }
+.text-warning { color: #f59e0b; }
 
 .control-buttons { display: flex; gap: 1rem; }
 .flex-1 { flex: 1; }
