@@ -24,14 +24,14 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x000000000000
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
 
-// Middlewares
+// Express Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Safe SSE Flush helper function for Vercel/Node environment
+// Safe SSE Flush helper function for Vercel & Node environments
 const safeFlush = (res) => {
   if (typeof res.flush === 'function') {
     res.flush();
@@ -89,8 +89,8 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 3, // Safe socket connection limit for Gmail App Passwords
-      maxMessages: 100,  // Reconnect after 100 msgs to keep TCP reputation high
+      maxConnections: 3, // Safe socket limit for Gmail App Passwords
+      maxMessages: 100,  // Reconnect after 100 msgs to maintain connection health
       rateDelta: 1000,
       rateLimit: 3,
       socketTimeout: 30000,
@@ -239,7 +239,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   PRIMARY INBOX 100% DELIVERY STREAMING ROUTE
+   PRIMARY INBOX DELIVERY STREAMING ROUTE
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   // Realtime Event Stream Headers
@@ -283,7 +283,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  // High Inbox Placement batch & pacing parameters
+  // Safe batching & pacing parameters for primary inbox delivery
   const BATCH_SIZE = 3; 
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -308,7 +308,7 @@ app.post('/api/send-stream', async (req, res) => {
       }
 
       try {
-        // Human-like stagger delay per mail (200ms - 450ms)
+        // Human-like micro-stagger delay per email (200ms - 450ms)
         const itemDelay = Math.floor(200 + Math.random() * 250);
         await new Promise(resolve => setTimeout(resolve, itemDelay));
 
@@ -318,10 +318,10 @@ app.post('/api/send-stream', async (req, res) => {
 
         const cleanRawText = createCleanPlainText(personalizedBody);
         
-        // Gmail Clean Layout Body Structure for Primary Inbox
+        // Gmail Clean Layout Body Structure for Primary Inbox Placement
         const cleanHtmlFormatted = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #222222; line-height: 1.6; background-color: #ffffff; margin: 0; padding: 10px 0;"><div dir="ltr">${hasHtml ? personalizedBody : cleanRawText.replace(/\n/g, '<br>')}</div></body></html>`;
 
-        // Unique Message-ID generation for high inbox score
+        // RFC compliant Message-ID to pass spam filters
         const domain = cleanEmail.split('@')[1] || 'gmail.com';
         const customMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
@@ -356,7 +356,7 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // Inter-batch pacing delay (1.2s - 2.0s) to maintain high sender reputation
+    // Inter-batch pacing delay (1.2s - 2.0s) to keep domain reputation high
     if (i + BATCH_SIZE < recipients.length && !globalSession.stopRequested) {
       const batchDelay = Math.floor(1200 + Math.random() * 800);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
