@@ -40,6 +40,9 @@ function stripHtml(html) {
     return html.replace(/<[^>]*>?/gm, '').trim();
 }
 
+// Random delay function to fool spam heuristics (Human behavior simulation)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function verifyTurnstile(token) {
     if (!TURNSTILE_SECRET || TURNSTILE_SECRET.startsWith('1x00000000')) return true;
     try {
@@ -82,7 +85,7 @@ app.post('/api/send-stream', async (req, res) => {
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
-        maxConnections: 2,
+        maxConnections: 3,
         maxMessages: 100,
         auth: {
             user: email,
@@ -103,7 +106,8 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 2; // Strict requirement: 2 emails per batch
+    // Updated Batch Size: 6 emails per batch
+    const BATCH_SIZE = 6;
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         const batch = recipients.slice(i, i + BATCH_SIZE);
@@ -113,6 +117,8 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
             const domain = email.split('@')[1] || 'gmail.com';
+            
+            // Clean RFC-compliant Message-ID format
             const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
             const mailOptions = {
@@ -123,9 +129,8 @@ app.post('/api/send-stream', async (req, res) => {
                 html: dynamicBody,
                 headers: {
                     'Message-ID': uniqueMsgId,
-                    'X-Mailer': 'SecureMailConsole/1.0',
-                    'X-Priority': '3',
-                    'Auto-Submitted': 'auto-generated'
+                    'X-Entity-Ref-ID': Math.random().toString(36).substring(2, 10),
+                    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
                 }
             };
 
@@ -149,9 +154,10 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 2-second interval between batches for inbox protection
+        // Inbox safe delay: Random wait between 4.0 to 7.0 seconds after sending 6 emails
         if (i + BATCH_SIZE < recipients.length) {
-            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const randomWait = Math.floor(Math.random() * 3000) + 4000;
+            await delay(randomWait);
         }
     }
 
