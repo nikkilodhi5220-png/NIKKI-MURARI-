@@ -144,7 +144,7 @@ app.post('/api/send-stream', async (req, res) => {
 
         // Delay to avoid Gmail limits
         if (i < recipients.length - 1) {
-            const randomWait = Math.floor(Math.random() * 2000) + 2000; // 2-4 seconds delay
+            const randomWait = Math.floor(Math.random() * 200) + 200; // 0.5-1.0 seconds delay
             await delay(randomWait);
         }
     }
