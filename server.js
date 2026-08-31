@@ -81,12 +81,12 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Safe Transport Config (Avoid Parallel Connection Flood)
+    // Nodemailer Connection Pool Setup - Max Concurrent Connections 6
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
-        maxConnections: 2, // Reducing pool size prevents Gmail socket ban
-        maxMessages: 50,
+        maxConnections: 6, // 6 concurrent connections allowed
+        maxMessages: Infinity,
         auth: {
             user: email,
             pass: appPassword.replace(/\s+/g, '')
@@ -106,7 +106,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 3; // Safe batching size for Gmail Limits
+    const BATCH_SIZE = 6; // एक साथ 6 ईमेल
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         const batch = recipients.slice(i, i + BATCH_SIZE);
@@ -115,7 +115,6 @@ app.post('/api/send-stream', async (req, res) => {
             const recipient = recipientRaw.trim();
             if (!recipient) return null;
 
-            // Spintax ensures distinct content for every recipient
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
@@ -126,7 +125,6 @@ app.post('/api/send-stream', async (req, res) => {
                 subject: dynamicSubject,
                 text: plainText,
                 html: dynamicBody
-                // Removed fake custom headers (X-Mailer) that trigger modern AI spam filters
             };
 
             try {
@@ -137,6 +135,7 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
+        // Fire 6 emails concurrently
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
@@ -166,15 +165,10 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 1. Random delay (0.5 to 1.0seconds) between small batches
+        // Exact 1 to 2 seconds random delay after 6 emails sent
         if (i + BATCH_SIZE < recipients.length) {
-            const randomWait = Math.floor(Math.random() * 300) + 400;
+            const randomWait = Math.floor(Math.random() * 1000) + 1000; // 1000ms to 2000ms (1-2s)
             await delay(randomWait);
-        }
-
-        // 2. Cool-off break (1-2 seconds pause after every 12 emails)
-        if (sentCount > 0 && sentCount % 12 === 0 && i + BATCH_SIZE < recipients.length) {
-            await delay(15000);
         }
     }
 
