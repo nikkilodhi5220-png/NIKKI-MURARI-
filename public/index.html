@@ -18,7 +18,7 @@
                 <i class="fa-solid fa-lock"></i>
             </div>
             <h2>Access Protected</h2>
-            <p>Enter the password to continue</p>
+            <p>Enter password to continue</p>
             <form id="gate-form" autocomplete="off">
                 <div class="form-group">
                     <div class="password-wrapper">
@@ -28,17 +28,16 @@
                 </div>
                 <div id="gate-error" class="gate-error hidden">
                     <i class="fa-solid fa-triangle-exclamation"></i>
-                    <span>Incorrect password</span>
+                    <span id="gate-error-text">Incorrect password</span>
                 </div>
                 <button type="submit" id="gate-submit-btn" class="btn btn-primary btn-block">
-                    <i class="fa-solid fa-arrow-right-to-bracket"></i> Enter
+                    <i class="fa-solid fa-arrow-right-to-bracket"></i> Enter Console
                 </button>
             </form>
         </div>
     </div>
 
     <div class="app-container hidden" id="main-app">
-        <!-- Header with Double-Click Logout -->
         <header class="app-header">
             <h1><i class="fa-solid fa-shield-halved"></i> Secure Mail Console</h1>
             <button type="button" id="logout-btn" class="btn-logout" title="Double click to logout">
@@ -46,10 +45,9 @@
             </button>
         </header>
 
-        <!-- Dashboard Section -->
         <section id="dashboard-section">
             <div class="dashboard-header fade-in">
-                <h2><i class="fa-solid fa-paper-plane"></i> Bulk Email Sender</h2>
+                <h2><i class="fa-solid fa-paper-plane"></i> Bulk Email Sender (Batch Size: 2)</h2>
             </div>
 
             <div class="dashboard-grid">
@@ -57,8 +55,6 @@
                 <div class="card composer-card fade-in delay-1">
                     <h3><i class="fa-solid fa-pen-to-square"></i> Compose Message</h3>
                     <form id="compose-form" onsubmit="return false;">
-                        
-                        <!-- Row 1: Sender Name & Your Gmail -->
                         <div class="form-row">
                             <div class="form-group half">
                                 <label for="sender-name">Sender Name</label>
@@ -70,7 +66,6 @@
                             </div>
                         </div>
 
-                        <!-- Row 2: App Password & Email Subject -->
                         <div class="form-row">
                             <div class="form-group half">
                                 <label for="dashboard-password">App Password</label>
@@ -85,13 +80,11 @@
                             </div>
                         </div>
 
-                        <!-- Row 3: Message Body -->
                         <div class="form-group flex-grow">
                             <label for="message-body">Message Body (Plain Text / HTML)</label>
-                            <textarea id="message-body" placeholder="Write your email here... Spintax supported: {Hi|Hello}" required></textarea>
+                            <textarea id="message-body" placeholder="Write message... Spintax supported: {Hi|Hello|Hey}" required></textarea>
                         </div>
-                        
-                        <!-- Anti Spam Turnstile -->
+
                         <div class="form-group" style="margin-top: 0.5rem; margin-bottom: 0;">
                             <label><i class="fa-solid fa-shield-cat"></i> Spam Protection</label>
                             <div class="cf-turnstile" data-sitekey="1x00000000000000000000AA" data-theme="light"></div>
@@ -106,18 +99,15 @@
                             <h3><i class="fa-solid fa-users"></i> Recipients</h3>
                             <span class="badge" id="detected-count">0 found</span>
                         </div>
-                        <p class="help-subtext">Paste emails (comma separated, new lines, or Excel copy)</p>
+                        <p class="help-subtext">Paste emails (comma, space, or newline separated)</p>
                         <div class="form-group flex-grow" style="margin-bottom: 0;">
                             <textarea id="recipients-input" placeholder="john@example.com&#10;jane@example.com"></textarea>
-                        </div>
-                        <div id="email-validation-error" class="error-message hidden">
-                            <i class="fa-solid fa-triangle-exclamation"></i> <span>Please enter valid recipients.</span>
                         </div>
                     </div>
 
                     <!-- Progress Monitor Card -->
                     <div class="card progress-card fade-in delay-3">
-                        <h3><i class="fa-solid fa-chart-pie"></i> Progress Monitor</h3>
+                        <h3><i class="fa-solid fa-chart-pie"></i> Dispatch Status</h3>
 
                         <div class="stats-grid">
                             <div class="stat-box neutral">
@@ -144,12 +134,12 @@
 
                         <div class="status-indicator">
                             <i id="status-icon" class="fa-solid fa-circle-pause text-muted"></i>
-                            <span id="status-text">Ready to send</span>
+                            <span id="status-text">Ready to dispatch</span>
                         </div>
 
                         <div class="control-buttons">
                             <button type="button" id="send-btn" class="btn btn-success btn-lg flex-1">
-                                <i class="fa-solid fa-paper-plane"></i> Send All
+                                <i class="fa-solid fa-paper-plane"></i> Send All (Batch of 2)
                             </button>
                             <button type="button" id="stop-btn" class="btn btn-danger btn-lg flex-1 hidden">
                                 <i class="fa-solid fa-stop"></i> Stop Sending
@@ -161,7 +151,6 @@
         </section>
     </div>
 
-    <!-- Cloudflare Turnstile -->
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script src="script.js"></script>
 </body>
