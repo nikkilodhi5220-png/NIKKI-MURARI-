@@ -1,42 +1,33 @@
-require('dotenv').config();
 const express = require('express');
 const nodemailer = require('nodemailer');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
+require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const SITE_PASSWORD = process.env.SITE_PASSWORD || '123456';
-const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
-
-// Active streams for target cancellation tracking
-const activeStreams = new Map();
-
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+app.use(cors());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Verify Cloudflare Turnstile Token
-async function verifyTurnstile(token) {
-    if (!TURNSTILE_SECRET_KEY) return true; // Skip if key not configured
-    if (!token) return false;
+const PORT = process.env.PORT || 3000;
+const GATE_PASSWORD = process.env.GATE_PASSWORD || 'admin123';
+const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 
-    try {
-        const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                secret: TURNSTILE_SECRET_KEY,
-                response: token
-            })
-        });
-        const data = await response.json();
-        return data.success;
-    } catch (err) {
-        console.error('Turnstile verification error:', err);
-        return false;
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { success: false, message: 'Too many login attempts. Try again later.' }
+});
+
+app.post('/api/auth', loginLimiter, (req, res) => {
+    const { password } = req.body;
+    if (password === GATE_PASSWORD) {
+        return res.json({ success: true, token: Buffer.from(GATE_PASSWORD).toString('base64') });
     }
-}
+    return res.status(401).json({ success: false, message: 'Incorrect password' });
+});
 
-// Spintax Parsing Helper: {Hi|Hello|Hey} -> Random choice
 function parseSpintax(text) {
     if (!text) return '';
     return text.replace(/\{([^{}]+)\}/g, (match, choices) => {
@@ -45,120 +36,130 @@ function parseSpintax(text) {
     });
 }
 
-// 1. Password Auth API
-app.post('/api/auth', (req, res) => {
-    const { password } = req.body;
-    if (password === SITE_PASSWORD) {
-        return res.json({ success: true });
-    }
-    return res.status(401).json({ success: false, message: 'Invalid password' });
-});
+function stripHtml(html) {
+    return html.replace(/<[^>]*>?/gm, '').trim();
+}
 
-// 2. Verify SMTP Credentials API
-app.post('/api/verify', async (req, res) => {
-    const { email, appPassword, cfToken } = req.body;
-
-    const isHuman = await verifyTurnstile(cfToken);
-    if (!isHuman) {
-        return res.status(400).json({ success: false, message: 'Turnstile verification failed.' });
-    }
-
-    if (!email || !appPassword) {
-        return res.status(400).json({ success: false, message: 'Email and App Password required.' });
-    }
-
-    const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: { user: email, pass: appPassword }
-    });
-
+async function verifyTurnstile(token) {
+    if (!TURNSTILE_SECRET || TURNSTILE_SECRET.startsWith('1x00000000')) return true;
     try {
-        await transporter.verify();
-        return res.json({ success: true, message: 'SMTP credentials valid.' });
-    } catch (err) {
-        console.error('SMTP Auth Failure:', err.message);
-        return res.status(401).json({ success: false, message: 'SMTP authentication failed. Check credentials.' });
+        const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `secret=${encodeURIComponent(TURNSTILE_SECRET)}&response=${encodeURIComponent(token)}`
+        });
+        const data = await response.json();
+        return data.success;
+    } catch (e) {
+        return false;
     }
-});
+}
 
-// 3. Send Bulk Email Stream Endpoint (SSE)
 app.post('/api/send-stream', async (req, res) => {
-    const { email, appPassword, senderName, subject, messageBody, recipients, cfToken, streamId } = req.body;
+    const { senderName, email, appPassword, subject, body, recipients, cfToken, authToken } = req.body;
+
+    if (authToken !== Buffer.from(GATE_PASSWORD).toString('base64')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
 
     const isHuman = await verifyTurnstile(cfToken);
     if (!isHuman) {
-        return res.status(400).json({ success: false, message: 'Turnstile verification failed.' });
+        return res.status(400).json({ error: 'Captcha validation failed' });
     }
 
     if (!email || !appPassword || !recipients || !Array.isArray(recipients) || recipients.length === 0) {
-        return res.status(400).json({ success: false, message: 'Invalid payload.' });
+        return res.status(400).json({ error: 'Missing parameters' });
     }
 
-    // Assign session stream tracking ID
-    const currentStreamId = streamId || Date.now().toString();
-    activeStreams.set(currentStreamId, { stopRequested: false });
-
-    // Header Setup for SSE
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
+    const sendSSE = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
     const transporter = nodemailer.createTransport({
         service: 'gmail',
-        auth: { user: email, pass: appPassword },
-        maxConnections: 5,
-        maxMessages: 100
+        pool: true,
+        maxConnections: 2,
+        maxMessages: 100,
+        auth: {
+            user: email,
+            pass: appPassword.replace(/\s+/g, '')
+        }
     });
 
-    for (let i = 0; i < recipients.length; i++) {
-        const streamState = activeStreams.get(currentStreamId);
-        if (streamState && streamState.stopRequested) {
-            res.write(`data: ${JSON.stringify({ stopped: true, message: 'Stopped by user.' })}\n\n`);
-            break;
-        }
-
-        const recipient = recipients[i];
-        const processedSubject = parseSpintax(subject);
-        const processedBody = parseSpintax(messageBody);
-
-        const mailOptions = {
-            from: `"${senderName}" <${email}>`,
-            to: recipient,
-            subject: processedSubject,
-            html: processedBody
-        };
-
-        try {
-            await transporter.sendMail(mailOptions);
-            res.write(`data: ${JSON.stringify({ success: true, recipient, index: i + 1, total: recipients.length })}\n\n`);
-        } catch (err) {
-            console.error(`Failed to send to ${recipient}:`, err.message);
-            res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message, index: i + 1, total: recipients.length })}\n\n`);
-        }
-
-        // Small delay (~150ms) to ensure smooth streaming without hitting Google rate limiters
-        await new Promise(resolve => setTimeout(resolve, 150));
+    try {
+        await transporter.verify();
+    } catch (error) {
+        sendSSE({ type: 'fatal_error', message: 'SMTP Auth Failed. Check Gmail & App Password.' });
+        return res.end();
     }
 
-    res.write('data: [DONE]\n\n');
-    activeStreams.delete(currentStreamId);
+    const total = recipients.length;
+    let sentCount = 0;
+    let failedCount = 0;
+
+    sendSSE({ type: 'start', total });
+
+    const BATCH_SIZE = 2; // Strict requirement: 2 emails per batch
+
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+        const batch = recipients.slice(i, i + BATCH_SIZE);
+
+        const batchPromises = batch.map(async (recipient) => {
+            const dynamicSubject = parseSpintax(subject);
+            const dynamicBody = parseSpintax(body);
+            const plainText = stripHtml(dynamicBody);
+            const domain = email.split('@')[1] || 'gmail.com';
+            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
+
+            const mailOptions = {
+                from: `"${senderName}" <${email}>`,
+                to: recipient,
+                subject: dynamicSubject,
+                text: plainText,
+                html: dynamicBody,
+                headers: {
+                    'Message-ID': uniqueMsgId,
+                    'X-Mailer': 'SecureMailConsole/1.0',
+                    'X-Priority': '3',
+                    'Auto-Submitted': 'auto-generated'
+                }
+            };
+
+            try {
+                await transporter.sendMail(mailOptions);
+                return { recipient, success: true };
+            } catch (err) {
+                return { recipient, success: false, error: err.message };
+            }
+        });
+
+        const results = await Promise.all(batchPromises);
+
+        results.forEach((resResult) => {
+            if (resResult.success) {
+                sentCount++;
+                sendSSE({ type: 'progress', status: 'sent', recipient: resResult.recipient, sentCount, failedCount });
+            } else {
+                failedCount++;
+                sendSSE({ type: 'progress', status: 'failed', recipient: resResult.recipient, error: resResult.error, sentCount, failedCount });
+            }
+        });
+
+        // 2-second interval between batches for inbox protection
+        if (i + BATCH_SIZE < recipients.length) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+    }
+
+    transporter.close();
+    sendSSE({ type: 'complete', sentCount, failedCount, total });
     res.end();
 });
 
-// 4. Stop Email Sending Endpoint
-app.post('/api/stop', (req, res) => {
-    const { streamId } = req.body;
-    if (streamId && activeStreams.has(streamId)) {
-        activeStreams.get(streamId).stopRequested = true;
-    } else {
-        // Fallback: stop all streams if no specific ID provided
-        for (const [id, state] of activeStreams.entries()) {
-            state.stopRequested = true;
-        }
-    }
-    return res.json({ success: true, message: 'Stop signal registered.' });
-});
-
 app.listen(PORT, () => {
-    console.log(`Server running smoothly on http://localhost:${PORT}`);
+    console.log(`Server listening on port ${PORT}`);
 });
