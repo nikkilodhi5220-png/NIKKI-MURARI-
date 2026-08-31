@@ -7,6 +7,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,7 @@ const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Nk@#';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x0000000000000000000000000000000AA';
 
-// Map-based session manager to eliminate global race conditions
+// Session and Connection Pool Maps
 const activeSessions = new Map();
 const poolMap = new Map();
 
@@ -32,7 +33,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Safe SSE Flush helper function for Vercel & Node environments
+// Safe SSE Flush helper function
 const safeFlush = (res) => {
   if (typeof res.flush === 'function') {
     res.flush();
@@ -46,7 +47,7 @@ io.on('connection', (socket) => {
 });
 
 /* ==========================================================================
-   TURNSTILE BOT PROTECTION VERIFICATION (SAFE HARDENED)
+   1. CLOUDFLARE TURNSTILE VERIFICATION
    ========================================================================== */
 async function verifyTurnstileToken(token, remoteIp) {
   if (!token || TURNSTILE_SECRET_KEY.startsWith('1x0000000000000000000000000000000AA')) {
@@ -72,7 +73,7 @@ async function verifyTurnstileToken(token, remoteIp) {
 }
 
 /* ==========================================================================
-   OPTIMIZED INBOX TRANSPORTER POOL (6 Concurrent Connections)
+   2. HIGH-INBOXING TRANSPORTER POOL (6 Concurrent Connections)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -90,8 +91,8 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // Parallel limits set to 6
-      maxMessages: 100,  
+      maxConnections: 6, // 6 parallel active connections
+      maxMessages: 100,
       rateDelta: 1000,
       rateLimit: 6,
       socketTimeout: 30000,
@@ -103,7 +104,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   RECIPIENT NORMALIZATION, SANITIZATION & ADVANCED SPINTAX
+   3. HELPER FUNCTIONS FOR SANITIZATION & PERSONALIZATION
    ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
@@ -132,7 +133,7 @@ function parseRecipientData(input) {
     }
   }
 
-  // Prevent CRLF Injection in Email & Name fields
+  // Prevent Header Injections
   email = email.replace(/[\r\n]/g, '').trim();
   rawName = rawName.replace(/[\r\n]/g, '').trim();
 
@@ -208,7 +209,7 @@ function createCleanPlainText(text) {
 }
 
 /* ==========================================================================
-   API ROUTES
+   4. API ROUTES
    ========================================================================== */
 app.post('/api/auth', (req, res) => {
   const { password } = req.body;
@@ -244,7 +245,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   PRIMARY INBOX DELIVERY STREAMING ROUTE (SAFE & FAST 6 PARALLEL MAILS)
+   5. STREAMING SENDING ROUTE (6 PARALLEL MAILS & OPTIMIZED DELIVERABILITY)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipients, cfToken, sessionId } = req.body;
@@ -261,7 +262,7 @@ app.post('/api/send-stream', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Invalid Request Data' });
   }
 
-  // Realtime Event Stream Headers
+  // Setup Event Stream
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -271,24 +272,23 @@ app.post('/api/send-stream', async (req, res) => {
   });
   safeFlush(res);
 
-  // Generate or assign isolated Session ID
-  const activeId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const activeId = sessionId || `sess_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
   activeSessions.set(activeId, { stopRequested: false });
 
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || '').replace(/[\r\n"]/g, '').trim();
 
-  // SSE Keep-Alive Ping with Memory Leak Safety
+  // SSE Keep-Alive Ping
   const keepAlivePing = setInterval(() => {
-    try { 
-      res.write(': keep-alive\n\n'); 
+    try {
+      res.write(': keep-alive\n\n');
       safeFlush(res);
     } catch {
       clearInterval(keepAlivePing);
     }
   }, 2500);
 
-  // Auto Clean-up on Connection Interruption/Disconnect
+  // Connection Close Clean up
   req.on('close', () => {
     clearInterval(keepAlivePing);
     activeSessions.delete(activeId);
@@ -296,19 +296,19 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  // High-Speed Concurrency Batch Size (6 Mails Parallel)
-  const BATCH_SIZE = 6; 
+  // High-Speed Concurrency: 6 Emails sent in parallel per batch
+  const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     const currentSession = activeSessions.get(activeId);
     if (!currentSession || currentSession.stopRequested) {
-      res.write(`data: ${JSON.stringify({ success: false, error: 'Stopped by User' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ success: false, error: 'Stopped by User', sessionId: activeId })}\n\n`);
       break;
     }
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    // Concurrent Parallel Execution of 6 emails safely
+    // Parallel execution of batch
     await Promise.all(
       batch.map(async (rawRecipient) => {
         const sessState = activeSessions.get(activeId);
@@ -317,29 +317,29 @@ app.post('/api/send-stream', async (req, res) => {
         const recipient = parseRecipientData(rawRecipient);
 
         if (!recipient.email) {
-          const errPayload = { success: false, recipient: '', error: 'Invalid Email Format' };
+          const errPayload = { success: false, recipient: '', error: 'Invalid Email Format', sessionId: activeId };
           res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
           safeFlush(res);
           return;
         }
 
         try {
-          // Micro-stagger delay (50ms - 120ms) to bypass burst detection filters
-          const itemDelay = Math.floor(50 + Math.random() * 70);
-          await new Promise(resolve => setTimeout(resolve, itemDelay));
+          // Micro jitter delay (150ms - 350ms) to ensure smooth socket handling & inbox placement
+          const jitterDelay = Math.floor(150 + Math.random() * 200);
+          await new Promise(resolve => setTimeout(resolve, jitterDelay));
 
-          // Header Injection Prevention for Subject
+          // Clean subject line to prevent CRLF injection
           const rawSubject = personalizeContent(subject, recipient) || 'Quick note';
           const personalizedSubject = rawSubject.replace(/[\r\n]/g, ' ').trim();
 
           const personalizedBody = personalizeContent(messageBody, recipient);
           const hasHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
           const cleanRawText = createCleanPlainText(personalizedBody);
-          
+
           const cleanHtmlFormatted = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #222222; line-height: 1.6; background-color: #ffffff; margin: 0; padding: 10px 0;"><div dir="ltr">${hasHtml ? personalizedBody : cleanRawText.replace(/\n/g, '<br>')}</div></body></html>`;
 
           const domain = cleanEmail.split('@')[1] || 'gmail.com';
-          const customMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
+          const customMsgId = `<${Date.now()}.${crypto.randomBytes(6).toString('hex')}@${domain}>`;
 
           const mailOptions = {
             from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -351,7 +351,7 @@ app.post('/api/send-stream', async (req, res) => {
             html: cleanHtmlFormatted,
             text: cleanRawText,
             headers: {
-              'X-Mailer': 'Gmail Native Direct',
+              'X-Mailer': 'Gmail Direct Engine',
               'X-Priority': '3',
               'Importance': 'normal'
             }
@@ -373,10 +373,10 @@ app.post('/api/send-stream', async (req, res) => {
       })
     );
 
-    // Optimized Pacing Delay between 6-Mail Batches (400ms - 700ms)
+    // Optimized Pacing Delay between 6-Mail Batches (300ms - 600ms)
     const sessStateEnd = activeSessions.get(activeId);
     if (i + BATCH_SIZE < recipients.length && sessStateEnd && !sessStateEnd.stopRequested) {
-      const batchDelay = Math.floor(400 + Math.random() * 300);
+      const batchDelay = Math.floor(300 + Math.random() * 300);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
@@ -389,22 +389,21 @@ app.post('/api/send-stream', async (req, res) => {
 });
 
 /* ==========================================================================
-   SAFE STOP ROUTE (Session Specific Stop)
+   6. SAFE STOP ROUTE
    ========================================================================== */
 app.post('/api/stop', (req, res) => {
   const { sessionId } = req.body;
-  
+
   if (sessionId && activeSessions.has(sessionId)) {
     activeSessions.get(sessionId).stopRequested = true;
-    return res.json({ success: true, message: `Session ${sessionId} stopped.` });
+    return res.json({ success: true, message: `Session ${sessionId} stopped successfully.` });
   }
 
-  // Fallback: stop all sessions safely
   for (const session of activeSessions.values()) {
     session.stopRequested = true;
   }
-  
-  res.json({ success: true, message: 'All active sending processes stopped.' });
+
+  res.json({ success: true, message: 'All active processes stopped.' });
 });
 
 app.get('*', (req, res) => {
