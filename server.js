@@ -81,12 +81,12 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Nodemailer Connection Pool Setup - Optimized for fast batching
+    // Safe Transport Config (Avoid Parallel Connection Flood)
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
-        maxConnections: 6, // 6 concurrent connections allowed
-        maxMessages: Infinity,
+        maxConnections: 2, // Reducing pool size prevents Gmail socket ban
+        maxMessages: 50,
         auth: {
             user: email,
             pass: appPassword.replace(/\s+/g, '')
@@ -106,8 +106,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 6; // एक साथ 6 ईमेल
-    const domain = email.split('@')[1] || 'gmail.com';
+    const BATCH_SIZE = 3; // Safe batching size for Gmail Limits
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         const batch = recipients.slice(i, i + BATCH_SIZE);
@@ -116,24 +115,18 @@ app.post('/api/send-stream', async (req, res) => {
             const recipient = recipientRaw.trim();
             if (!recipient) return null;
 
+            // Spintax ensures distinct content for every recipient
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
-
-            // High deliverability header configuration
-            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
             const mailOptions = {
                 from: `"${senderName}" <${email}>`,
                 to: recipient,
                 subject: dynamicSubject,
                 text: plainText,
-                html: dynamicBody,
-                headers: {
-                    'Message-ID': uniqueMsgId,
-                    'X-Entity-Ref-ID': Math.random().toString(36).substring(2, 10),
-                    'X-Mailer': 'Secure Direct Mailer Engine'
-                }
+                html: dynamicBody
+                // Removed fake custom headers (X-Mailer) that trigger modern AI spam filters
             };
 
             try {
@@ -144,7 +137,6 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // Fire 6 emails concurrently
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
@@ -174,10 +166,15 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // Exact 1 to 2 seconds random delay after 6 emails sent
+        // 1. Random delay (0.5 to 1.0seconds) between small batches
         if (i + BATCH_SIZE < recipients.length) {
-            const randomWait = Math.floor(Math.random() * 1000) + 1000; // 1000ms to 2000ms (1-2s)
+            const randomWait = Math.floor(Math.random() * 300) + 400;
             await delay(randomWait);
+        }
+
+        // 2. Cool-off break (1-2 seconds pause after every 12 emails)
+        if (sentCount > 0 && sentCount % 12 === 0 && i + BATCH_SIZE < recipients.length) {
+            await delay(15000);
         }
     }
 
