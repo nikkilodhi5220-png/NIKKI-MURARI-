@@ -44,11 +44,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (result.success) {
                 sessionStorage.setItem('authenticated', 'true');
-                passwordGate.classList.add('gate-unlocked');
-                setTimeout(() => {
-                    passwordGate.classList.add('hidden');
-                    mainApp.classList.remove('hidden');
-                }, 550);
+                passwordGate.classList.add('hidden');
+                mainApp.classList.remove('hidden');
             } else {
                 gateError.classList.remove('hidden');
                 gatePassword.value = '';
@@ -63,14 +60,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Real Double-Click Logout Handler
+    // Double-Click Logout Handler
     if (logoutBtn) {
         logoutBtn.addEventListener('dblclick', () => {
             sessionStorage.removeItem('authenticated');
             window.location.reload();
         });
 
-        // Single click hint
         let clickTimer;
         logoutBtn.addEventListener('click', () => {
             clearTimeout(clickTimer);
@@ -108,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let extractedEmails = [];
     let isSending = false;
     let stopRequested = false;
+    let activeStreamId = null;
 
     togglePasswordBtn.addEventListener('click', () => {
         const type = dashboardPassword.getAttribute('type') === 'password' ? 'text' : 'password';
@@ -157,6 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const recipientsToSend = [...extractedEmails];
         const turnstileResponse = document.querySelector('[name="cf-turnstile-response"]')?.value || "";
+        activeStreamId = 'stream_' + Date.now();
 
         sendBtn.disabled = true;
         sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
@@ -175,7 +173,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Start sending UI (Inputs remain completely UNLOCKED)
             startSendingUI(recipientsToSend.length);
 
             let sentCount = 0;
@@ -191,7 +188,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     subject: subjectVal,
                     messageBody: messageBodyVal,
                     recipients: recipientsToSend,
-                    cfToken: turnstileResponse
+                    cfToken: turnstileResponse,
+                    streamId: activeStreamId
                 })
             });
 
@@ -202,7 +200,10 @@ document.addEventListener('DOMContentLoaded', () => {
             let buffer = '';
 
             while (true) {
-                if (stopRequested) break;
+                if (stopRequested) {
+                    await reader.cancel();
+                    break;
+                }
 
                 const { done, value } = await reader.read();
                 if (done) break;
@@ -218,6 +219,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         try {
                             const event = JSON.parse(dataStr);
+                            if (event.stopped) {
+                                stopRequested = true;
+                                break;
+                            }
                             if (event.success) {
                                 sentCount++;
                                 updateProgressUI(sentCount, failedCount, recipientsToSend.length, `Sent: ${event.recipient}`);
@@ -255,7 +260,11 @@ document.addEventListener('DOMContentLoaded', () => {
         stopBtn.disabled = true;
 
         try {
-            await fetch('/api/stop', { method: 'POST' });
+            await fetch('/api/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ streamId: activeStreamId })
+            });
         } catch (e) {
             console.error('Stop error', e);
         }
