@@ -71,7 +71,7 @@ async function verifyTurnstileToken(token, remoteIp) {
 }
 
 /* ==========================================================================
-   OPTIMIZED INBOX TRANSPORTER POOL (Gmail Standard Compliance)
+   OPTIMIZED INBOX TRANSPORTER POOL (6 Concurrent Connections)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -89,10 +89,10 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 3, // Safe socket limit for Gmail App Passwords
+      maxConnections: 6, // Concurrent limit updated to 6
       maxMessages: 100,  // Reconnect after 100 msgs to maintain connection health
       rateDelta: 1000,
-      rateLimit: 3,
+      rateLimit: 6,
       socketTimeout: 30000,
       connectionTimeout: 15000
     });
@@ -239,7 +239,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   PRIMARY INBOX DELIVERY STREAMING ROUTE
+   PRIMARY INBOX DELIVERY STREAMING ROUTE (FAST 6 PARALLEL MAILS)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   // Realtime Event Stream Headers
@@ -283,8 +283,8 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  // Safe batching & pacing parameters for primary inbox delivery
-  const BATCH_SIZE = 3; 
+  // Set Batch Size to 6 for simultaneous sending
+  const BATCH_SIZE = 6; 
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -294,71 +294,71 @@ app.post('/api/send-stream', async (req, res) => {
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    for (let idx = 0; idx < batch.length; idx++) {
-      if (globalSession.stopRequested) break;
+    // Parallel Execution using Promise.all for 6 emails concurrently
+    await Promise.all(
+      batch.map(async (rawRecipient) => {
+        if (globalSession.stopRequested) return;
 
-      const rawRecipient = batch[idx];
-      const recipient = parseRecipientData(rawRecipient);
+        const recipient = parseRecipientData(rawRecipient);
 
-      if (!recipient.email) {
-        const errPayload = { success: false, recipient: '', error: 'Invalid Email' };
-        res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
-        safeFlush(res);
-        continue;
-      }
+        if (!recipient.email) {
+          const errPayload = { success: false, recipient: '', error: 'Invalid Email' };
+          res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
+          safeFlush(res);
+          return;
+        }
 
-      try {
-        // Human-like micro-stagger delay per email (200ms - 450ms)
-        const itemDelay = Math.floor(200 + Math.random() * 250);
-        await new Promise(resolve => setTimeout(resolve, itemDelay));
+        try {
+          // Minimal random micro-stagger (50ms - 150ms) to bypass standard rate burst detection
+          const itemDelay = Math.floor(50 + Math.random() * 100);
+          await new Promise(resolve => setTimeout(resolve, itemDelay));
 
-        const personalizedSubject = personalizeContent(subject, recipient) || 'Quick note';
-        const personalizedBody = personalizeContent(messageBody, recipient);
-        const hasHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
+          const personalizedSubject = personalizeContent(subject, recipient) || 'Quick note';
+          const personalizedBody = personalizeContent(messageBody, recipient);
+          const hasHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-        const cleanRawText = createCleanPlainText(personalizedBody);
-        
-        // Gmail Clean Layout Body Structure for Primary Inbox Placement
-        const cleanHtmlFormatted = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #222222; line-height: 1.6; background-color: #ffffff; margin: 0; padding: 10px 0;"><div dir="ltr">${hasHtml ? personalizedBody : cleanRawText.replace(/\n/g, '<br>')}</div></body></html>`;
+          const cleanRawText = createCleanPlainText(personalizedBody);
+          
+          const cleanHtmlFormatted = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #222222; line-height: 1.6; background-color: #ffffff; margin: 0; padding: 10px 0;"><div dir="ltr">${hasHtml ? personalizedBody : cleanRawText.replace(/\n/g, '<br>')}</div></body></html>`;
 
-        // RFC compliant Message-ID to pass spam filters
-        const domain = cleanEmail.split('@')[1] || 'gmail.com';
-        const customMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
+          const domain = cleanEmail.split('@')[1] || 'gmail.com';
+          const customMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
-        const mailOptions = {
-          from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-          to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
-          replyTo: cleanEmail,
-          date: new Date(),
-          messageId: customMsgId,
-          subject: personalizedSubject,
-          html: cleanHtmlFormatted,
-          text: cleanRawText,
-          headers: {
-            'X-Mailer': 'Gmail Native Direct',
-            'X-Priority': '3',
-            'Importance': 'normal'
-          }
-        };
+          const mailOptions = {
+            from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
+            to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
+            replyTo: cleanEmail,
+            date: new Date(),
+            messageId: customMsgId,
+            subject: personalizedSubject,
+            html: cleanHtmlFormatted,
+            text: cleanRawText,
+            headers: {
+              'X-Mailer': 'Gmail Native Direct',
+              'X-Priority': '3',
+              'Importance': 'normal'
+            }
+          };
 
-        await transporter.sendMail(mailOptions);
+          await transporter.sendMail(mailOptions);
 
-        const payload = { success: true, recipient: recipient.email, name: recipient.name };
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
-        safeFlush(res);
-        io.emit('mail_sent', payload);
+          const payload = { success: true, recipient: recipient.email, name: recipient.name };
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+          safeFlush(res);
+          io.emit('mail_sent', payload);
 
-      } catch (err) {
-        const errPayload = { success: false, recipient: recipient.email, error: err.message };
-        res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
-        safeFlush(res);
-        io.emit('mail_error', errPayload);
-      }
-    }
+        } catch (err) {
+          const errPayload = { success: false, recipient: recipient.email, error: err.message };
+          res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
+          safeFlush(res);
+          io.emit('mail_error', errPayload);
+        }
+      })
+    );
 
-    // Inter-batch pacing delay (1.2s - 2.0s) to keep domain reputation high
+    // Optimized short delay (500ms - 800ms) between batches to keep velocity fast
     if (i + BATCH_SIZE < recipients.length && !globalSession.stopRequested) {
-      const batchDelay = Math.floor(1200 + Math.random() * 800);
+      const batchDelay = Math.floor(500 + Math.random() * 300);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
@@ -388,7 +388,7 @@ app.get('*', (req, res) => {
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   server.listen(PORT, () => {
-    console.log(`🚀 Mailer server running on port ${PORT}`);
+    console.log(`🚀 Fast Mailer server running on port ${PORT}`);
   });
 }
 
