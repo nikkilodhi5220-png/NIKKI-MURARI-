@@ -37,10 +37,9 @@ function parseSpintax(text) {
 }
 
 function stripHtml(html) {
-    return html.replace(/<[^>]*>?/gm, '').trim();
+    return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
 }
 
-// Random delay function to fool spam heuristics (Human behavior simulation)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function verifyTurnstile(token) {
@@ -82,11 +81,10 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Sequential connection setup (Avoids concurrent socket triggers)
     const transporter = nodemailer.createTransport({
         service: 'gmail',
-        pool: true,
-        maxConnections: 3,
-        maxMessages: 100,
+        pool: false, 
         auth: {
             user: email,
             pass: appPassword.replace(/\s+/g, '')
@@ -106,57 +104,36 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    // Updated Batch Size: 6 emails per batch
-    const BATCH_SIZE = 6;
+    // Single-stream processing is significantly safer for SMTP reputation than parallel bursts
+    for (let i = 0; i < recipients.length; i++) {
+        const recipient = recipients[i];
+        const dynamicSubject = parseSpintax(subject);
+        const dynamicBody = parseSpintax(body);
+        const plainText = stripHtml(dynamicBody);
 
-    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-        const batch = recipients.slice(i, i + BATCH_SIZE);
-
-        const batchPromises = batch.map(async (recipient) => {
-            const dynamicSubject = parseSpintax(subject);
-            const dynamicBody = parseSpintax(body);
-            const plainText = stripHtml(dynamicBody);
-            const domain = email.split('@')[1] || 'gmail.com';
-            
-            // Clean RFC-compliant Message-ID format
-            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
-
-            const mailOptions = {
-                from: `"${senderName}" <${email}>`,
-                to: recipient,
-                subject: dynamicSubject,
-                text: plainText,
-                html: dynamicBody,
-                headers: {
-                    'Message-ID': uniqueMsgId,
-                    'X-Entity-Ref-ID': Math.random().toString(36).substring(2, 10),
-                    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-                }
-            };
-
-            try {
-                await transporter.sendMail(mailOptions);
-                return { recipient, success: true };
-            } catch (err) {
-                return { recipient, success: false, error: err.message };
+        const mailOptions = {
+            from: `"${senderName}" <${email}>`,
+            to: recipient,
+            subject: dynamicSubject,
+            text: plainText,
+            html: dynamicBody,
+            headers: {
+                'X-Report-Abuse': `Please report abuse to ${email}`
             }
-        });
+        };
 
-        const results = await Promise.all(batchPromises);
+        try {
+            await transporter.sendMail(mailOptions);
+            sentCount++;
+            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount });
+        } catch (err) {
+            failedCount++;
+            sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount });
+        }
 
-        results.forEach((resResult) => {
-            if (resResult.success) {
-                sentCount++;
-                sendSSE({ type: 'progress', status: 'sent', recipient: resResult.recipient, sentCount, failedCount });
-            } else {
-                failedCount++;
-                sendSSE({ type: 'progress', status: 'failed', recipient: resResult.recipient, error: resResult.error, sentCount, failedCount });
-            }
-        });
-
-        // Inbox safe delay: Random wait between 4.0 to 7.0 seconds after sending 6 emails
-        if (i + BATCH_SIZE < recipients.length) {
-            const randomWait = Math.floor(Math.random() * 3000) + 4000;
+        // Throttle: 3 to 6 seconds per email to stay within standard rate limits
+        if (i < recipients.length - 1) {
+            const randomWait = Math.floor(Math.random() * 3000) + 3000;
             await delay(randomWait);
         }
     }
