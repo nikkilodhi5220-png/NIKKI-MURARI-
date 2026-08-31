@@ -14,7 +14,6 @@ const PORT = process.env.PORT || 3000;
 const GATE_PASSWORD = process.env.GATE_PASSWORD || 'admin123';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 
-// Login Rate Limiter
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
@@ -29,7 +28,6 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Helper Function: Spintax Parsing {Hi|Hello|Hey}
 function parseSpintax(text) {
     if (!text) return '';
     return text.replace(/\{([^{}]+)\}/g, (match, choices) => {
@@ -38,14 +36,12 @@ function parseSpintax(text) {
     });
 }
 
-// Helper Function: HTML से Plain Text बनाना
 function stripHtml(html) {
     return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
 }
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Turnstile verification
 async function verifyTurnstile(token) {
     if (!TURNSTILE_SECRET || TURNSTILE_SECRET.startsWith('1x00000000')) return true;
     try {
@@ -64,12 +60,10 @@ async function verifyTurnstile(token) {
 app.post('/api/send-stream', async (req, res) => {
     const { senderName, email, appPassword, subject, body, recipients, cfToken, authToken } = req.body;
 
-    // Authorization Verification
     if (authToken !== Buffer.from(GATE_PASSWORD).toString('base64')) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Captcha Validation
     const isHuman = await verifyTurnstile(cfToken);
     if (!isHuman) {
         return res.status(400).json({ error: 'Captcha validation failed' });
@@ -79,7 +73,6 @@ app.post('/api/send-stream', async (req, res) => {
         return res.status(400).json({ error: 'Missing parameters' });
     }
 
-    // SSE Headers Setup
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -88,10 +81,8 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Gmail SMTP Setup
     const transporter = nodemailer.createTransport({
         service: 'gmail',
-        pool: false,
         auth: {
             user: email,
             pass: appPassword.replace(/\s+/g, '')
@@ -105,17 +96,16 @@ app.post('/api/send-stream', async (req, res) => {
         return res.end();
     }
 
-    const total = recipients.length;
+    const total = Number(recipients.length) || 0;
     let sentCount = 0;
     let failedCount = 0;
 
     sendSSE({ type: 'start', total });
 
-    // Loop through recipients
     for (let i = 0; i < recipients.length; i++) {
-        const recipient = recipients[i];
-        
-        // Dynamic subject and body for high inbox rate
+        const recipient = recipients[i].trim();
+        if (!recipient) continue;
+
         const dynamicSubject = parseSpintax(subject);
         const dynamicBody = parseSpintax(body);
         const plainText = stripHtml(dynamicBody);
@@ -125,37 +115,37 @@ app.post('/api/send-stream', async (req, res) => {
             to: recipient,
             subject: dynamicSubject,
             text: plainText,
-            html: dynamicBody,
-            headers: {
-                'X-Mailer': 'Nodemailer Express Engine',
-                'X-Report-Abuse': `Please report abuse to ${email}`
-            }
+            html: dynamicBody
         };
 
         try {
             await transporter.sendMail(mailOptions);
             sentCount++;
-            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount });
+            sendSSE({ 
+                type: 'progress', 
+                status: 'sent', 
+                recipient, 
+                sentCount: Number(sentCount), 
+                failedCount: Number(failedCount),
+                total: Number(total)
+            });
         } catch (err) {
             failedCount++;
-            sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount });
+            sendSSE({ 
+                type: 'progress', 
+                status: 'failed', 
+                recipient, 
+                error: err.message, 
+                sentCount: Number(sentCount), 
+                failedCount: Number(failedCount),
+                total: Number(total)
+            });
         }
 
-        // Delay handling
+        // Delay to avoid Gmail limits
         if (i < recipients.length - 1) {
-            // 1. हर 6 मेल भेजने के बाद 30 से 45 सेकंड का ब्रेक (Batch Pause)
-            if ((i + 1) % 6 === 0) {
-                const batchPause = Math.floor(Math.random() * 15000) + 30000; // 30s to 45s
-                sendSSE({ 
-                    type: 'info', 
-                    message: `Sent 6 mails. Pausing for ${Math.round(batchPause / 1000)} seconds to protect SMTP reputation...` 
-                });
-                await delay(batchPause);
-            } else {
-                // 2. सामान्य मेल के बीच 5 से 9 सेकंड की देरी (Inbox-friendly interval)
-                const randomWait = Math.floor(Math.random() * 4000) + 5000; 
-                await delay(randomWait);
-            }
+            const randomWait = Math.floor(Math.random() * 2000) + 2000; // 2-4 seconds delay
+            await delay(randomWait);
         }
     }
 
