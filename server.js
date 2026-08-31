@@ -81,8 +81,12 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Nodemailer Connection Pool Setup
     const transporter = nodemailer.createTransport({
         service: 'gmail',
+        pool: true,
+        maxConnections: 3,
+        maxMessages: 100,
         auth: {
             user: email,
             pass: appPassword.replace(/\s+/g, '')
@@ -102,49 +106,75 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    for (let i = 0; i < recipients.length; i++) {
-        const recipient = recipients[i].trim();
-        if (!recipient) continue;
+    const BATCH_SIZE = 6; // एक साथ 6 ईमेल
+    const domain = email.split('@')[1] || 'gmail.com';
 
-        const dynamicSubject = parseSpintax(subject);
-        const dynamicBody = parseSpintax(body);
-        const plainText = stripHtml(dynamicBody);
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+        const batch = recipients.slice(i, i + BATCH_SIZE);
 
-        const mailOptions = {
-            from: `"${senderName}" <${email}>`,
-            to: recipient,
-            subject: dynamicSubject,
-            text: plainText,
-            html: dynamicBody
-        };
+        const batchPromises = batch.map(async (recipientRaw) => {
+            const recipient = recipientRaw.trim();
+            if (!recipient) return null;
 
-        try {
-            await transporter.sendMail(mailOptions);
-            sentCount++;
-            sendSSE({ 
-                type: 'progress', 
-                status: 'sent', 
-                recipient, 
-                sentCount: Number(sentCount), 
-                failedCount: Number(failedCount),
-                total: Number(total)
-            });
-        } catch (err) {
-            failedCount++;
-            sendSSE({ 
-                type: 'progress', 
-                status: 'failed', 
-                recipient, 
-                error: err.message, 
-                sentCount: Number(sentCount), 
-                failedCount: Number(failedCount),
-                total: Number(total)
-            });
-        }
+            const dynamicSubject = parseSpintax(subject);
+            const dynamicBody = parseSpintax(body);
+            const plainText = stripHtml(dynamicBody);
 
-        // Delay to avoid Gmail limits
-        if (i < recipients.length - 1) {
-            const randomWait = Math.floor(Math.random() * 700) + 700; // 0.5-1.0 seconds delay
+            // Clean, RFC compliant Header to maximize inboxing
+            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 8)}@${domain}>`;
+
+            const mailOptions = {
+                from: `"${senderName}" <${email}>`,
+                to: recipient,
+                subject: dynamicSubject,
+                text: plainText,
+                html: dynamicBody,
+                headers: {
+                    'Message-ID': uniqueMsgId,
+                    'X-Mailer': 'Nodemailer Express Engine'
+                }
+            };
+
+            try {
+                await transporter.sendMail(mailOptions);
+                return { recipient, success: true };
+            } catch (err) {
+                return { recipient, success: false, error: err.message };
+            }
+        });
+
+        const results = await Promise.all(batchPromises);
+
+        results.forEach((resResult) => {
+            if (!resResult) return;
+
+            if (resResult.success) {
+                sentCount++;
+                sendSSE({ 
+                    type: 'progress', 
+                    status: 'sent', 
+                    recipient: resResult.recipient, 
+                    sentCount: Number(sentCount), 
+                    failedCount: Number(failedCount),
+                    total: Number(total) 
+                });
+            } else {
+                failedCount++;
+                sendSSE({ 
+                    type: 'progress', 
+                    status: 'failed', 
+                    recipient: resResult.recipient, 
+                    error: resResult.error, 
+                    sentCount: Number(sentCount), 
+                    failedCount: Number(failedCount),
+                    total: Number(total) 
+                });
+            }
+        });
+
+        // 6 ईमेल सेंड होने के बाद 1 से 2 सेकंड का रैंडम गैप
+        if (i + BATCH_SIZE < recipients.length) {
+            const randomWait = Math.floor(Math.random() * 650) + 1500;
             await delay(randomWait);
         }
     }
