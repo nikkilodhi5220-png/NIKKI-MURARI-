@@ -1,314 +1,164 @@
-import 'dotenv/config';
-import express from 'express';
-import nodemailer from 'nodemailer';
-import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import crypto from 'crypto';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+require('dotenv').config();
+const express = require('express');
+const nodemailer = require('nodemailer');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
+const SITE_PASSWORD = process.env.SITE_PASSWORD || '123456';
+const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
-const globalSession = { stopRequested: false };
-const poolMap = new Map();
+// Active streams for target cancellation tracking
+const activeStreams = new Map();
 
-app.use(cors());
-app.use(express.json({ limit: "10mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json());
+app.use(express.static(path.join(__dirname)));
 
-/* ==========================================================================
-   1. HIGH-SPEED INBOX TRANSPORTER (MAX POOL CONNECTION)
-   ========================================================================== */
-function getPort587Transporter(email, appPassword) {
-  const cleanEmail = email.toLowerCase().trim();
-  const cleanPass = appPassword.replace(/\s+/g, '').trim();
-  const key = `port587_${cleanEmail}_${cleanPass}`;
+// Verify Cloudflare Turnstile Token
+async function verifyTurnstile(token) {
+    if (!TURNSTILE_SECRET_KEY) return true; // Skip if key not configured
+    if (!token) return false;
 
-  if (!poolMap.has(key)) {
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false, // STARTTLS
-      requireTLS: true,
-      auth: {
-        user: cleanEmail,
-        pass: cleanPass
-      },
-      pool: true,
-      maxConnections: 6, // Fast parallel processing
-      maxMessages: 500,
-      socketTimeout: 20000,
-      connectionTimeout: 20000
-    });
-
-    poolMap.set(key, transporter);
-  }
-
-  return poolMap.get(key);
-}
-
-/* ==========================================================================
-   2. RECIPIENT PARSER, SPINTAX & CUSTOM CTAS
-   ========================================================================== */
-
-function getOrganicCallToAction() {
-  const ctas = [
-    "Yes please do",
-    "Yes please send",
-    "Yes go ahead"
-  ];
-  return ctas[Math.floor(Math.random() * ctas.length)];
-}
-
-function parseRecipientData(input) {
-  let email = "";
-  let rawName = "";
-
-  if (typeof input === 'object' && input !== null) {
-    email = (input.email || input.recipient || "").trim();
-    rawName = (input.name || input.fullName || input.first_name || "").trim();
-  } else if (typeof input === 'string') {
-    const str = input.trim();
-    const angleMatch = str.match(/^(?:"?([^"]*)"?\s)?<([^>]+)>$/);
-    if (angleMatch) {
-      rawName = angleMatch[1] ? angleMatch[1].trim() : "";
-      email = angleMatch[2].trim();
-    } else if (str.includes(',')) {
-      const parts = str.split(',');
-      if (parts[0].includes('@')) {
-        email = parts[0].trim();
-        rawName = parts[1].trim();
-      } else {
-        rawName = parts[0].trim();
-        email = parts[1].trim();
-      }
-    } else {
-      email = str;
+    try {
+        const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                secret: TURNSTILE_SECRET_KEY,
+                response: token
+            })
+        });
+        const data = await response.json();
+        return data.success;
+    } catch (err) {
+        console.error('Turnstile verification error:', err);
+        return false;
     }
-  }
-
-  if (!rawName && email.includes('@')) {
-    const prefix = email.split('@')[0];
-    rawName = prefix.replace(/[0-9_.-]/g, ' ').trim();
-  }
-
-  const formattedName = rawName
-    ? rawName.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
-    : "";
-
-  const firstName = formattedName ? formattedName.split(' ')[0] : "there";
-  const domain = email.includes('@') ? email.split('@')[1] : "";
-
-  return {
-    email: email.toLowerCase(),
-    name: formattedName,
-    firstName: firstName,
-    domain: domain
-  };
 }
 
+// Spintax Parsing Helper: {Hi|Hello|Hey} -> Random choice
 function parseSpintax(text) {
-  if (!text) return "";
-  let spun = String(text);
-  const regex = /\{([^{}]+)\}/s;
-  let iterations = 0;
-
-  while (regex.test(spun) && iterations < 25) {
-    spun = spun.replace(regex, (_, choices) => {
-      if (!choices.includes('|')) return choices;
-      const options = choices.split('|');
-      const pick = options[Math.floor(Math.random() * options.length)];
-      return pick ? pick.trim() : '';
+    if (!text) return '';
+    return text.replace(/\{([^{}]+)\}/g, (match, choices) => {
+        const options = choices.split('|');
+        return options[Math.floor(Math.random() * options.length)];
     });
-    iterations++;
-  }
-  return spun.replace(/[\{\}]/g, '').trim();
 }
 
-function personalizeContent(template, recipient) {
-  if (!template) return "";
-  let content = parseSpintax(template);
-  const fallback = recipient.firstName || recipient.name || 'there';
-
-  const currentDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
-  content = content.replace(/{Name}/gi, recipient.name || fallback);
-  content = content.replace(/{FirstName}/gi, recipient.firstName || fallback);
-  content = content.replace(/{First_Name}/gi, recipient.firstName || fallback);
-  content = content.replace(/{Email}/gi, recipient.email);
-  content = content.replace(/{Domain}/gi, recipient.domain);
-  content = content.replace(/{Date}/gi, currentDate);
-
-  return content;
-}
-
-function createPlainTextFromHtml(html) {
-  if (!html) return "";
-  return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*[\/]?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\n\s*\n/g, '\n\n')
-    .trim();
-}
-
-/* ==========================================================================
-   3. API ROUTES
-   ========================================================================== */
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
+// 1. Password Auth API
 app.post('/api/auth', (req, res) => {
-  const { password } = req.body;
-  if (password === SITE_PASSWORD) {
-    return res.json({ success: true, message: "Authorized" });
-  }
-  return res.status(401).json({ success: false, message: "Unauthorized Password" });
+    const { password } = req.body;
+    if (password === SITE_PASSWORD) {
+        return res.json({ success: true });
+    }
+    return res.status(401).json({ success: false, message: 'Invalid password' });
 });
 
-app.post("/api/verify", async (req, res) => {
-  const { email, appPassword } = req.body;
-  if (!email || !appPassword) {
-    return res.status(400).json({ success: false, message: "Credentials required" });
-  }
+// 2. Verify SMTP Credentials API
+app.post('/api/verify', async (req, res) => {
+    const { email, appPassword, cfToken } = req.body;
 
-  try {
-    const transporter = getPort587Transporter(email, appPassword);
-    await transporter.verify();
-    return res.json({ success: true, message: "SMTP verified successfully" });
-  } catch (error) {
-    return res.status(401).json({ success: false, message: "SMTP Auth Failed. Check App Password." });
-  }
-});
-
-/* ==========================================================================
-   4. ULTRA-FAST INBOX BATCH STREAMING ENGINE
-   ========================================================================== */
-app.post('/api/send-stream', async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-
-  const { email, appPassword, senderName, subject, messageBody, recipients } = req.body;
-
-  if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: "Invalid Request Data" })}\n\n`);
-    res.end();
-    return;
-  }
-
-  const cleanEmail = email.toLowerCase().trim();
-  const cleanSenderName = (senderName || "").replace(/["\r\n]/g, "").trim();
-  globalSession.stopRequested = false;
-
-  const keepAlivePing = setInterval(() => {
-    try { res.write(': keep-alive\n\n'); } catch {}
-  }, 3000);
-
-  const transporter = getPort587Transporter(email, appPassword);
-
-  // 6 Mails ek saath parallelly bhejne ke liye Batching (24 mails in ~12-13 sec)
-  const BATCH_SIZE = 6;
-  const domain = cleanEmail.split('@')[1] || 'gmail.com';
-
-  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-    if (globalSession.stopRequested) {
-      res.write(`data: ${JSON.stringify({ success: false, error: "Stopped by User" })}\n\n`);
-      break;
+    const isHuman = await verifyTurnstile(cfToken);
+    if (!isHuman) {
+        return res.status(400).json({ success: false, message: 'Turnstile verification failed.' });
     }
 
-    const currentBatch = recipients.slice(i, i + BATCH_SIZE);
+    if (!email || !appPassword) {
+        return res.status(400).json({ success: false, message: 'Email and App Password required.' });
+    }
 
-    // Parallel send execution for maximum speed
-    await Promise.all(
-      currentBatch.map(async (rawRecipient) => {
-        if (globalSession.stopRequested) return;
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: email, pass: appPassword }
+    });
 
-        const recipient = parseRecipientData(rawRecipient);
-        if (!recipient.email) return;
+    try {
+        await transporter.verify();
+        return res.json({ success: true, message: 'SMTP credentials valid.' });
+    } catch (err) {
+        console.error('SMTP Auth Failure:', err.message);
+        return res.status(401).json({ success: false, message: 'SMTP authentication failed. Check credentials.' });
+    }
+});
+
+// 3. Send Bulk Email Stream Endpoint (SSE)
+app.post('/api/send-stream', async (req, res) => {
+    const { email, appPassword, senderName, subject, messageBody, recipients, cfToken, streamId } = req.body;
+
+    const isHuman = await verifyTurnstile(cfToken);
+    if (!isHuman) {
+        return res.status(400).json({ success: false, message: 'Turnstile verification failed.' });
+    }
+
+    if (!email || !appPassword || !recipients || !Array.isArray(recipients) || recipients.length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid payload.' });
+    }
+
+    // Assign session stream tracking ID
+    const currentStreamId = streamId || Date.now().toString();
+    activeStreams.set(currentStreamId, { stopRequested: false });
+
+    // Header Setup for SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user: email, pass: appPassword },
+        maxConnections: 5,
+        maxMessages: 100
+    });
+
+    for (let i = 0; i < recipients.length; i++) {
+        const streamState = activeStreams.get(currentStreamId);
+        if (streamState && streamState.stopRequested) {
+            res.write(`data: ${JSON.stringify({ stopped: true, message: 'Stopped by user.' })}\n\n`);
+            break;
+        }
+
+        const recipient = recipients[i];
+        const processedSubject = parseSpintax(subject);
+        const processedBody = parseSpintax(messageBody);
+
+        const mailOptions = {
+            from: `"${senderName}" <${email}>`,
+            to: recipient,
+            subject: processedSubject,
+            html: processedBody
+        };
 
         try {
-          const personalizedSubject = personalizeContent(subject, recipient);
-          const personalizedBody = personalizeContent(messageBody, recipient);
-          const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
-          const customCTA = getOrganicCallToAction();
-
-          // Standard RFC Message-ID to pass Gmail DKIM & Spam filters
-          const customMessageId = `<${Date.now()}.${crypto.randomBytes(4).toString('hex')}@${domain}>`;
-
-          const mailOptions = {
-            from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-            to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
-            replyTo: cleanEmail,
-            subject: personalizedSubject || 'Important Notice',
-            headers: {
-              'Message-ID': customMessageId,
-              'X-Entity-Ref-ID': crypto.randomBytes(8).toString('hex')
-            }
-          };
-
-          if (isHtml) {
-            mailOptions.html = `
-              <!DOCTYPE html>
-              <html>
-              <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              </head>
-              <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #222222; line-height: 1.6; padding: 10px; margin: 0;">
-                <div>${personalizedBody}</div>
-                <br>
-                <p style="font-size: 14px; color: #333333; margin-top: 10px;">${customCTA}</p>
-              </body>
-              </html>
-            `;
-            mailOptions.text = createPlainTextFromHtml(personalizedBody) + `\n\n${customCTA}`;
-          } else {
-            mailOptions.text = personalizedBody + `\n\n${customCTA}`;
-          }
-
-          await transporter.sendMail(mailOptions);
-          res.write(`data: ${JSON.stringify({ success: true, recipient: recipient.email, name: recipient.name })}\n\n`);
-
+            await transporter.sendMail(mailOptions);
+            res.write(`data: ${JSON.stringify({ success: true, recipient, index: i + 1, total: recipients.length })}\n\n`);
         } catch (err) {
-          console.error(`Send Failure [${recipient.email}]:`, err.message);
-          res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
+            console.error(`Failed to send to ${recipient}:`, err.message);
+            res.write(`data: ${JSON.stringify({ success: false, recipient, error: err.message, index: i + 1, total: recipients.length })}\n\n`);
         }
-      })
-    );
 
-    // Dynamic 800ms - 1500ms delay between batches for ~12-13 sec total runtime for 24 mails
-    if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(800 + Math.random() * 700);
-      await new Promise(resolve => setTimeout(resolve, batchDelay));
+        // Small delay (~150ms) to ensure smooth streaming without hitting Google rate limiters
+        await new Promise(resolve => setTimeout(resolve, 150));
     }
-  }
 
-  clearInterval(keepAlivePing);
-  res.write("data: [DONE]\n\n");
-  res.end();
+    res.write('data: [DONE]\n\n');
+    activeStreams.delete(currentStreamId);
+    res.end();
 });
 
+// 4. Stop Email Sending Endpoint
 app.post('/api/stop', (req, res) => {
-  globalSession.stopRequested = true;
-  res.json({ success: true, message: "Sending process stopped" });
+    const { streamId } = req.body;
+    if (streamId && activeStreams.has(streamId)) {
+        activeStreams.get(streamId).stopRequested = true;
+    } else {
+        // Fallback: stop all streams if no specific ID provided
+        for (const [id, state] of activeStreams.entries()) {
+            state.stopRequested = true;
+        }
+    }
+    return res.json({ success: true, message: 'Stop signal registered.' });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on Port ${PORT} [High-Speed Inbox Engine Ready]`);
+    console.log(`Server running smoothly on http://localhost:${PORT}`);
 });
-
-export default app;
