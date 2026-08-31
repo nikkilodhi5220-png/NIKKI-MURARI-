@@ -18,10 +18,11 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
-const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
+const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Nk@#';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x0000000000000000000000000000000AA';
 
-const globalSession = { stopRequested: false };
+// Map-based session manager to eliminate global race conditions
+const activeSessions = new Map();
 const poolMap = new Map();
 
 // Express Middlewares
@@ -45,7 +46,7 @@ io.on('connection', (socket) => {
 });
 
 /* ==========================================================================
-   TURNSTILE BOT PROTECTION VERIFICATION
+   TURNSTILE BOT PROTECTION VERIFICATION (SAFE HARDENED)
    ========================================================================== */
 async function verifyTurnstileToken(token, remoteIp) {
   if (!token || TURNSTILE_SECRET_KEY.startsWith('1x0000000000000000000000000000000AA')) {
@@ -89,8 +90,8 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // Concurrent limit updated to 6
-      maxMessages: 100,  // Reconnect after 100 msgs to maintain connection health
+      maxConnections: 6, // Parallel limits set to 6
+      maxMessages: 100,  
       rateDelta: 1000,
       rateLimit: 6,
       socketTimeout: 30000,
@@ -102,7 +103,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   RECIPIENT NORMALIZATION & ADVANCED SPINTAX
+   RECIPIENT NORMALIZATION, SANITIZATION & ADVANCED SPINTAX
    ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
@@ -130,6 +131,10 @@ function parseRecipientData(input) {
       email = str;
     }
   }
+
+  // Prevent CRLF Injection in Email & Name fields
+  email = email.replace(/[\r\n]/g, '').trim();
+  rawName = rawName.replace(/[\r\n]/g, '').trim();
 
   if (!rawName && email.includes('@')) {
     const prefix = email.split('@')[0];
@@ -239,9 +244,23 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   PRIMARY INBOX DELIVERY STREAMING ROUTE (FAST 6 PARALLEL MAILS)
+   PRIMARY INBOX DELIVERY STREAMING ROUTE (SAFE & FAST 6 PARALLEL MAILS)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
+  const { email, appPassword, senderName, subject, messageBody, recipients, cfToken, sessionId } = req.body;
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+  if (cfToken) {
+    const isHuman = await verifyTurnstileToken(cfToken, clientIp);
+    if (!isHuman) {
+      return res.status(403).json({ success: false, error: 'Turnstile Verification Failed' });
+    }
+  }
+
+  if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
+    return res.status(400).json({ success: false, error: 'Invalid Request Data' });
+  }
+
   // Realtime Event Stream Headers
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -252,71 +271,69 @@ app.post('/api/send-stream', async (req, res) => {
   });
   safeFlush(res);
 
-  const { email, appPassword, senderName, subject, messageBody, recipients, cfToken } = req.body;
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-  if (!email || !appPassword || !Array.isArray(recipients) || recipients.length === 0) {
-    res.write(`data: ${JSON.stringify({ success: false, error: 'Invalid Request Data' })}\n\n`);
-    res.end();
-    return;
-  }
-
-  if (cfToken) {
-    const isHuman = await verifyTurnstileToken(cfToken, clientIp);
-    if (!isHuman) {
-      res.write(`data: ${JSON.stringify({ success: false, error: 'Turnstile Verification Failed' })}\n\n`);
-      res.end();
-      return;
-    }
-  }
+  // Generate or assign isolated Session ID
+  const activeId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  activeSessions.set(activeId, { stopRequested: false });
 
   const cleanEmail = email.toLowerCase().trim();
-  const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
-  globalSession.stopRequested = false;
+  const cleanSenderName = (senderName || '').replace(/[\r\n"]/g, '').trim();
 
+  // SSE Keep-Alive Ping with Memory Leak Safety
   const keepAlivePing = setInterval(() => {
     try { 
       res.write(': keep-alive\n\n'); 
       safeFlush(res);
-    } catch {}
+    } catch {
+      clearInterval(keepAlivePing);
+    }
   }, 2500);
+
+  // Auto Clean-up on Connection Interruption/Disconnect
+  req.on('close', () => {
+    clearInterval(keepAlivePing);
+    activeSessions.delete(activeId);
+  });
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  // Set Batch Size to 6 for simultaneous sending
+  // High-Speed Concurrency Batch Size (6 Mails Parallel)
   const BATCH_SIZE = 6; 
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-    if (globalSession.stopRequested) {
+    const currentSession = activeSessions.get(activeId);
+    if (!currentSession || currentSession.stopRequested) {
       res.write(`data: ${JSON.stringify({ success: false, error: 'Stopped by User' })}\n\n`);
       break;
     }
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    // Parallel Execution using Promise.all for 6 emails concurrently
+    // Concurrent Parallel Execution of 6 emails safely
     await Promise.all(
       batch.map(async (rawRecipient) => {
-        if (globalSession.stopRequested) return;
+        const sessState = activeSessions.get(activeId);
+        if (!sessState || sessState.stopRequested) return;
 
         const recipient = parseRecipientData(rawRecipient);
 
         if (!recipient.email) {
-          const errPayload = { success: false, recipient: '', error: 'Invalid Email' };
+          const errPayload = { success: false, recipient: '', error: 'Invalid Email Format' };
           res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
           safeFlush(res);
           return;
         }
 
         try {
-          // Minimal random micro-stagger (50ms - 150ms) to bypass standard rate burst detection
-          const itemDelay = Math.floor(50 + Math.random() * 100);
+          // Micro-stagger delay (50ms - 120ms) to bypass burst detection filters
+          const itemDelay = Math.floor(50 + Math.random() * 70);
           await new Promise(resolve => setTimeout(resolve, itemDelay));
 
-          const personalizedSubject = personalizeContent(subject, recipient) || 'Quick note';
+          // Header Injection Prevention for Subject
+          const rawSubject = personalizeContent(subject, recipient) || 'Quick note';
+          const personalizedSubject = rawSubject.replace(/[\r\n]/g, ' ').trim();
+
           const personalizedBody = personalizeContent(messageBody, recipient);
           const hasHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
-
           const cleanRawText = createCleanPlainText(personalizedBody);
           
           const cleanHtmlFormatted = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #222222; line-height: 1.6; background-color: #ffffff; margin: 0; padding: 10px 0;"><div dir="ltr">${hasHtml ? personalizedBody : cleanRawText.replace(/\n/g, '<br>')}</div></body></html>`;
@@ -342,13 +359,13 @@ app.post('/api/send-stream', async (req, res) => {
 
           await transporter.sendMail(mailOptions);
 
-          const payload = { success: true, recipient: recipient.email, name: recipient.name };
+          const payload = { success: true, recipient: recipient.email, name: recipient.name, sessionId: activeId };
           res.write(`data: ${JSON.stringify(payload)}\n\n`);
           safeFlush(res);
           io.emit('mail_sent', payload);
 
         } catch (err) {
-          const errPayload = { success: false, recipient: recipient.email, error: err.message };
+          const errPayload = { success: false, recipient: recipient.email, error: err.message, sessionId: activeId };
           res.write(`data: ${JSON.stringify(errPayload)}\n\n`);
           safeFlush(res);
           io.emit('mail_error', errPayload);
@@ -356,22 +373,38 @@ app.post('/api/send-stream', async (req, res) => {
       })
     );
 
-    // Optimized short delay (500ms - 800ms) between batches to keep velocity fast
-    if (i + BATCH_SIZE < recipients.length && !globalSession.stopRequested) {
-      const batchDelay = Math.floor(500 + Math.random() * 300);
+    // Optimized Pacing Delay between 6-Mail Batches (400ms - 700ms)
+    const sessStateEnd = activeSessions.get(activeId);
+    if (i + BATCH_SIZE < recipients.length && sessStateEnd && !sessStateEnd.stopRequested) {
+      const batchDelay = Math.floor(400 + Math.random() * 300);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
 
   clearInterval(keepAlivePing);
+  activeSessions.delete(activeId);
   res.write('data: [DONE]\n\n');
   safeFlush(res);
   res.end();
 });
 
+/* ==========================================================================
+   SAFE STOP ROUTE (Session Specific Stop)
+   ========================================================================== */
 app.post('/api/stop', (req, res) => {
-  globalSession.stopRequested = true;
-  res.json({ success: true, message: 'Sending process stopped' });
+  const { sessionId } = req.body;
+  
+  if (sessionId && activeSessions.has(sessionId)) {
+    activeSessions.get(sessionId).stopRequested = true;
+    return res.json({ success: true, message: `Session ${sessionId} stopped.` });
+  }
+
+  // Fallback: stop all sessions safely
+  for (const session of activeSessions.values()) {
+    session.stopRequested = true;
+  }
+  
+  res.json({ success: true, message: 'All active sending processes stopped.' });
 });
 
 app.get('*', (req, res) => {
@@ -388,7 +421,7 @@ app.get('*', (req, res) => {
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   server.listen(PORT, () => {
-    console.log(`🚀 Fast Mailer server running on port ${PORT}`);
+    console.log(`🚀 Secure Fast Mailer running on port ${PORT}`);
   });
 }
 
