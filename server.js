@@ -33,7 +33,7 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Advanced Spintax Engine
+// Spintax Processing (1 to 6 choices, Max 20 passes)
 function parseSpintax(text) {
     if (!text) return '';
     let result = String(text);
@@ -147,29 +147,18 @@ app.post('/api/send-stream', async (req, res) => {
         const plainText = cleanPlainText(dynamicBody);
         const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
 
-        // Refernce Code and Unique ID Generator for Primary Inbox Verification
-        const uniqueHash = crypto.randomBytes(4).toString('hex').toUpperCase();
-        const referenceCode = `REF-${Date.now().toString().slice(-6)}-${uniqueHash}`;
-        
+        const internalHash = crypto.randomBytes(4).toString('hex').toLowerCase();
         const innerContent = isHtml ? dynamicBody : plainText.replace(/\n/g, '<br>');
-        
-        // Humanized HTML Footprint with Clean Visible Reference Code
+
+        // Clean Natural HTML Container
         const cleanHtml = `
-            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.6;">
+            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.5;">
                 ${innerContent}
-                <br><br>
-                <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
-                <div style="font-size: 11px; color: #777777; line-height: 1.4;">
-                    <p style="margin: 0;">Reference ID: <strong>${referenceCode}</strong></p>
-                    <p style="margin: 4px 0 0 0;">If you prefer not to receive further updates, reply with "Unsubscribe".</p>
-                </div>
             </div>
         `;
 
-        const plainTextWithRef = `${plainText}\n\n---\nReference ID: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
-
         const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-        const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
+        const messageId = `<${Date.now()}.${internalHash}@${domainPart}>`;
 
         const mailOptions = {
             from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -177,24 +166,23 @@ app.post('/api/send-stream', async (req, res) => {
             replyTo: cleanEmail,
             messageId: messageId,
             date: new Date(),
-            subject: `${dynamicSubject} [${referenceCode}]`,
-            text: plainTextWithRef,
+            subject: dynamicSubject || 'Quick update',
+            text: plainText,
             html: cleanHtml,
             headers: {
                 'X-Mailer': 'Gmail Web Client',
-                'X-Entity-Ref-ID': referenceCode,
-                'X-Priority': '3',
-                'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${referenceCode}>`
+                'X-Entity-Ref-ID': `${Date.now()}-${internalHash}`,
+                'X-Priority': '3'
             }
         };
 
         try {
             await transporter.sendMail(mailOptions);
             sentCount++;
-            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount, ref: referenceCode });
+            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount });
         } catch (err) {
             failedCount++;
-            sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount, ref: referenceCode });
+            sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount });
         }
     }
 
