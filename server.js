@@ -3,11 +3,10 @@ const nodemailer = require('nodemailer');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -15,7 +14,6 @@ const PORT = process.env.PORT || 3000;
 const GATE_PASSWORD = process.env.GATE_PASSWORD || 'admin123';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 
-// Rate limiter for authentication
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
@@ -30,30 +28,22 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Helper functions for safe parsing & spintax
 function parseSpintax(text) {
     if (!text) return '';
-    let spun = String(text);
-    const regex = /\{([^{}]+)\}/g;
-    while (regex.test(spun)) {
-        spun = spun.replace(regex, (match, choices) => {
-            const options = choices.split('|');
-            return options[Math.floor(Math.random() * options.length)];
-        });
-    }
-    return spun;
+    return text.replace(/\{([^{}]+)\}/g, (_, choices) => {
+        const options = choices.split('|');
+        return options[Math.floor(Math.random() * options.length)];
+    });
 }
 
-function stripHtml(html) {
+function cleanPlainText(html) {
     if (!html) return '';
-    return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
-}
-
-function extractCleanEmail(input) {
-    if (!input) return '';
-    const match = String(input).match(/<([^>]+)>/);
-    const email = match ? match[1] : input;
-    return email.trim().toLowerCase();
+    return html
+        .replace(/<style([\s\S]*?)<\/style>/gi, '')
+        .replace(/<script([\s\S]*?)<\/script>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 async function verifyTurnstile(token) {
@@ -74,61 +64,43 @@ async function verifyTurnstile(token) {
 app.post('/api/send-stream', async (req, res) => {
     const { senderName, email, appPassword, subject, body, recipients, cfToken, authToken } = req.body;
 
-    // Authentication Check
     if (authToken !== Buffer.from(GATE_PASSWORD).toString('base64')) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Turnstile Check
     const isHuman = await verifyTurnstile(cfToken);
     if (!isHuman) {
         return res.status(400).json({ error: 'Captcha validation failed' });
     }
 
     if (!email || !appPassword || !recipients || !Array.isArray(recipients) || recipients.length === 0) {
-        return res.status(400).json({ error: 'Missing required parameters' });
+        return res.status(400).json({ error: 'Missing parameters' });
     }
 
-    const cleanSenderEmail = extractCleanEmail(email);
-    const safeSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
-    const cleanAppPassword = appPassword.replace(/\s+/g, '').trim();
-
-    // SSE Headers Setup
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-
-    let isClientConnected = true;
-    req.on('close', () => {
-        isClientConnected = false;
-    });
 
     const sendSSE = (data) => {
-        if (isClientConnected) {
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-        }
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Nodemailer Connection Pool (6 Parallel Connections)
+    // Maximum performance setup without triggering Gmail connection caps
     const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false, // STARTTLS safe handshake
-        requireTLS: true,
+        service: 'gmail',
         pool: true,
-        maxConnections: 6, // 6 parallel connections pool
-        maxMessages: Infinity,
+        maxConnections: 5,
+        maxMessages: 100,
         auth: {
-            user: cleanSenderEmail,
-            pass: cleanAppPassword
+            user: email,
+            pass: appPassword.replace(/\s+/g, '')
         }
     });
 
     try {
         await transporter.verify();
     } catch (error) {
-        sendSSE({ type: 'fatal_error', message: 'SMTP Auth Failed. Check Gmail & App Password.' });
+        sendSSE({ type: 'fatal_error', message: 'SMTP Auth Failed. Check Gmail address and App Password.' });
         return res.end();
     }
 
@@ -138,55 +110,39 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 6; // एक साथ 6 ईमेल सेंड करने की स्पीड
+    // Processing size tuned for maximum delivery efficiency
+    const BATCH_SIZE = 5;
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-        if (!isClientConnected) break;
-
         const batch = recipients.slice(i, i + BATCH_SIZE);
 
-        const batchPromises = batch.map(async (recipientRaw) => {
-            const recipientEmail = extractCleanEmail(recipientRaw);
-            if (!recipientEmail) return null;
-
+        const batchPromises = batch.map(async (recipient) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
-
-            // 🔧 INLINE WRAPPER WITH EXACT FONT SIZE 10pt (NO REF ID)
-            const formattedHtml = `
-                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
-                    <!-- Main Body Container (Font Size 10pt) -->
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
-                        ${dynamicBody}
-                    </div>
-                </div>
-            `;
-
-            const plainText = stripHtml(dynamicBody);
+            const plainText = cleanPlainText(dynamicBody);
 
             const mailOptions = {
-                from: safeSenderName ? `"${safeSenderName}" <${cleanSenderEmail}>` : cleanSenderEmail,
-                to: recipientEmail,
-                replyTo: cleanSenderEmail,
-                subject: dynamicSubject || 'No Subject',
+                from: `"${senderName}" <${email}>`,
+                to: recipient,
+                subject: dynamicSubject,
                 text: plainText,
-                html: formattedHtml
+                html: dynamicBody,
+                headers: {
+                    'X-Entity-Ref-ID': `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+                }
             };
 
             try {
                 await transporter.sendMail(mailOptions);
-                return { recipient: recipientEmail, success: true };
+                return { recipient, success: true };
             } catch (err) {
-                return { recipient: recipientEmail, success: false, error: err.message };
+                return { recipient, success: false, error: err.message };
             }
         });
 
-        // 6 पैरेलल ईमेल निष्पादित करें
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
-            if (!resResult) return;
-
             if (resResult.success) {
                 sentCount++;
                 sendSSE({ type: 'progress', status: 'sent', recipient: resResult.recipient, sentCount, failedCount });
@@ -196,10 +152,9 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 6 ईमेल भेजने के बाद 1 से 2 सेकंड (1000ms - 2000ms) का डायनामिक रैंडम डिले
-        if (i + BATCH_SIZE < recipients.length && isClientConnected) {
-            const randomDelay = Math.floor(Math.random() * 1000) + 1000;
-            await new Promise((resolve) => setTimeout(resolve, randomDelay));
+        // Mandatory micro-pause between batches to protect domain health
+        if (i + BATCH_SIZE < recipients.length) {
+            await new Promise((resolve) => setTimeout(resolve, 800));
         }
     }
 
@@ -209,5 +164,5 @@ app.post('/api/send-stream', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running safely on port ${PORT}`);
+    console.log(`Server listening on port ${PORT}`);
 });
