@@ -4,6 +4,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -16,8 +17,6 @@ const PORT = process.env.PORT || 3000;
 const GATE_PASSWORD = process.env.GATE_PASSWORD || 'admin123';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 
-// 6 मेल गिनने के लिए काउंटर और पॉज़ डिले
-let mailCount = 0;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const loginLimiter = rateLimit({
@@ -34,7 +33,7 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Spintax Processing (1 to 6 choices, Max 20 passes)
+// Advanced Spintax Engine (1 to 6 choices, Max 20 Passes)
 function parseSpintax(text) {
     if (!text) return '';
     let result = String(text);
@@ -105,7 +104,7 @@ app.post('/api/send-stream', async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
     const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
 
-    // High Deliverability Transporter Configuration
+    // High Deliverability Transporter Setup
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
         port: 465,
@@ -131,15 +130,16 @@ app.post('/api/send-stream', async (req, res) => {
     const total = recipients.length;
     let sentCount = 0;
     let failedCount = 0;
+    let localMailCounter = 0;
 
     sendSSE({ type: 'start', total });
 
     for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i];
 
-        // 6 मेल के बाद 1 से 2 सेकंड (1000ms - 2000ms) का रैंडम गैप
-        mailCount++;
-        if (mailCount % 6 === 0) {
+        // 6 मेल भेजने के बाद 1 से 2 सेकंड का रैंडम गैप
+        localMailCounter++;
+        if (localMailCounter % 6 === 0) {
             const randomPause = Math.floor(Math.random() * 1000) + 1000;
             await delay(randomPause);
         }
@@ -149,15 +149,12 @@ app.post('/api/send-stream', async (req, res) => {
         const plainText = cleanPlainText(dynamicBody);
         const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
 
-        // Anti-Spam Duplicate Filter Bypass (Unique Fingerprint)
+        // Safe Clean Natural Mail Container (Without Risky Hidden CSS Tricks)
         const uniqueHash = crypto.randomBytes(8).toString('hex');
         const innerContent = isHtml ? dynamicBody : plainText.replace(/\n/g, '<br>');
         const cleanHtml = `
-            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
+            <div dir="ltr" style="font-family: Arial, sans-serif, Helvetica; font-size: 14px; color: #222222; line-height: 1.5;">
                 ${innerContent}
-                <div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; font-size:0px;">
-                    ${uniqueHash}
-                </div>
             </div>
         `;
 
@@ -196,7 +193,20 @@ app.post('/api/send-stream', async (req, res) => {
 });
 
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    const filePath1 = path.join(process.cwd(), 'public', 'index.html');
+    const filePath2 = path.join(__dirname, 'public', 'index.html');
+    if (fs.existsSync(filePath1)) return res.sendFile(filePath1);
+    if (fs.existsSync(filePath2)) return res.sendFile(filePath2);
+    return res.status(200).send('<h1>Server Running Safely</h1>');
+});
+
+// Exception Handlers for Production Stability
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
 });
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
