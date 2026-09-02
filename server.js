@@ -3,21 +3,16 @@ const nodemailer = require('nodemailer');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const crypto = require('crypto');
-const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json());
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
 const GATE_PASSWORD = process.env.GATE_PASSWORD || 'admin123';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -33,33 +28,16 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Spintax Processing (1 to 6 choices, Max 20 passes)
 function parseSpintax(text) {
     if (!text) return '';
-    let result = String(text);
-    const regex = /\{([^{}]+)\}/s;
-    let count = 0;
-    while (regex.test(result) && count < 20) {
-        result = result.replace(regex, (_, choices) => {
-            const arr = choices.split('|');
-            const availableChoices = arr.slice(0, Math.min(arr.length, 6));
-            return availableChoices[Math.floor(Math.random() * availableChoices.length)].trim();
-        });
-        count++;
-    }
-    return result;
+    return text.replace(/\{([^{}]+)\}/g, (match, choices) => {
+        const options = choices.split('|');
+        return options[Math.floor(Math.random() * options.length)];
+    });
 }
 
-function cleanPlainText(html) {
-    if (!html) return '';
-    return html
-        .replace(/<style([\s\S]*?)<\/style>/gi, '')
-        .replace(/<script([\s\S]*?)<\/script>/gi, '')
-        .replace(/<br\s*[\/]?>/gi, '\n')
-        .replace(/<\/p>/gi, '\n\n')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+function stripHtml(html) {
+    return html.replace(/<[^>]*>?/gm, '').trim();
 }
 
 async function verifyTurnstile(token) {
@@ -71,7 +49,7 @@ async function verifyTurnstile(token) {
             body: `secret=${encodeURIComponent(TURNSTILE_SECRET)}&response=${encodeURIComponent(token)}`
         });
         const data = await response.json();
-        return data.success === true;
+        return data.success;
     } catch (e) {
         return false;
     }
@@ -101,29 +79,21 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    const cleanEmail = email.toLowerCase().trim();
-    const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
-
-    // Secure & Optimised Connection Pool
     const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
+        service: 'gmail',
         pool: true,
-        maxConnections: 3,
+        maxConnections: 2,
         maxMessages: 100,
-        socketTimeout: 30000,
-        connectionTimeout: 30000,
         auth: {
-            user: cleanEmail,
-            pass: appPassword.replace(/\s+/g, '').trim()
+            user: email,
+            pass: appPassword.replace(/\s+/g, '')
         }
     });
 
     try {
         await transporter.verify();
     } catch (error) {
-        sendSSE({ type: 'fatal_error', message: 'SMTP Auth Failed. Check Gmail address and App Password.' });
+        sendSSE({ type: 'fatal_error', message: 'SMTP Auth Failed. Check Gmail & App Password.' });
         return res.end();
     }
 
@@ -133,73 +103,55 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    for (let i = 0; i < recipients.length; i++) {
-        const recipient = recipients[i];
+    const BATCH_SIZE = 2; // Strict requirement: 2 emails per batch
 
-        // Safe Human Delay: 1 से 2.5 सेकंड का रैंडम गैप हर ईमेल के बीच
-        const itemDelay = Math.floor(Math.random() * 1500) + 1000;
-        await delay(itemDelay);
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+        const batch = recipients.slice(i, i + BATCH_SIZE);
 
-        // हर 4 मेल के बाद अतिरिक्त पॉज़ (Gmail IP Blocking Safety)
-        if ((i + 1) % 4 === 0) {
-            const batchPause = Math.floor(Math.random() * 2000) + 1500;
-            await delay(batchPause);
-        }
+        const batchPromises = batch.map(async (recipient) => {
+            const dynamicSubject = parseSpintax(subject);
+            const dynamicBody = parseSpintax(body);
+            const plainText = stripHtml(dynamicBody);
+            const domain = email.split('@')[1] || 'gmail.com';
+            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
-        const dynamicSubject = parseSpintax(subject);
-        const dynamicBody = parseSpintax(body);
-        const plainText = cleanPlainText(dynamicBody);
-        const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
+            const mailOptions = {
+                from: `"${senderName}" <${email}>`,
+                to: recipient,
+                subject: dynamicSubject,
+                text: plainText,
+                html: dynamicBody,
+                headers: {
+                    'Message-ID': uniqueMsgId,
+                    'X-Mailer': 'SecureMailConsole/1.0',
+                    'X-Priority': '3',
+                    'Auto-Submitted': 'auto-generated'
+                }
+            };
 
-        // Dynamic Unique Reference Code for Template Only
-        const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const refCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
-
-        const innerContent = isHtml ? dynamicBody : plainText.replace(/\n/g, '<br>');
-
-        // Natural Template Footer (Spam Filter Safe)
-        const cleanHtml = `
-            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.6;">
-                ${innerContent}
-                <br><br>
-                <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
-                <div style="font-size: 11px; color: #888888; line-height: 1.4;">
-                    <p style="margin: 0;">Ref Code: <strong>${refCode}</strong></p>
-                    <p style="margin: 4px 0 0 0;">To stop receiving these emails, reply with "Unsubscribe".</p>
-                </div>
-            </div>
-        `;
-
-        const plainTextWithRef = `${plainText}\n\n---\nRef Code: ${refCode}\nTo stop receiving these emails, reply with "Unsubscribe".`;
-
-        const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-        const messageId = `<${refCode.toLowerCase()}@${domainPart}>`;
-
-        const mailOptions = {
-            from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-            to: recipient,
-            replyTo: cleanEmail,
-            messageId: messageId,
-            date: new Date(),
-            subject: dynamicSubject || 'Quick update', // Subject line completely clean
-            text: plainTextWithRef,
-            html: cleanHtml,
-            headers: {
-                'X-Mailer': 'Gmail Web Client',
-                'X-Entity-Ref-ID': refCode,
-                'X-Priority': '3',
-                'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${refCode}>`,
-                'X-Auto-Response-Suppress': 'OOF, AutoReply'
+            try {
+                await transporter.sendMail(mailOptions);
+                return { recipient, success: true };
+            } catch (err) {
+                return { recipient, success: false, error: err.message };
             }
-        };
+        });
 
-        try {
-            await transporter.sendMail(mailOptions);
-            sentCount++;
-            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount, ref: refCode });
-        } catch (err) {
-            failedCount++;
-            sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount });
+        const results = await Promise.all(batchPromises);
+
+        results.forEach((resResult) => {
+            if (resResult.success) {
+                sentCount++;
+                sendSSE({ type: 'progress', status: 'sent', recipient: resResult.recipient, sentCount, failedCount });
+            } else {
+                failedCount++;
+                sendSSE({ type: 'progress', status: 'failed', recipient: resResult.recipient, error: resResult.error, sentCount, failedCount });
+            }
+        });
+
+        // 2-second interval between batches for inbox protection
+        if (i + BATCH_SIZE < recipients.length) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
         }
     }
 
@@ -208,26 +160,6 @@ app.post('/api/send-stream', async (req, res) => {
     res.end();
 });
 
-app.get('*', (req, res) => {
-    const filePath1 = path.join(process.cwd(), 'public', 'index.html');
-    const filePath2 = path.join(__dirname, 'public', 'index.html');
-    if (fs.existsSync(filePath1)) return res.sendFile(filePath1);
-    if (fs.existsSync(filePath2)) return res.sendFile(filePath2);
-    return res.status(200).send('<h1>Server Running Safely</h1>');
+app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
 });
-
-process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled Rejection:', reason);
-});
-
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-});
-
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-    app.listen(PORT, () => {
-        console.log(`Server running safely on port ${PORT}`);
-    });
-}
-
-module.exports = app;
