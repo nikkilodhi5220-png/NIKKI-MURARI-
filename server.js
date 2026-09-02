@@ -37,9 +37,11 @@ function parseSpintax(text) {
 }
 
 function stripHtml(html) {
-    if (!html) return '';
-    return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+    return html.replace(/<[^>]*>?/gm, '').trim();
 }
+
+// Random delay function to fool spam heuristics (Human behavior simulation)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function verifyTurnstile(token) {
     if (!TURNSTILE_SECRET || TURNSTILE_SECRET.startsWith('1x00000000')) return true;
@@ -80,14 +82,13 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // 6 मेल एक साथ हैंडल करने के लिए Connection Pool सेट किया गया है
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
-        maxConnections: 6, // 6 सैटलाइट कनेक्शंस समानांतर (Parallel) चलेंगे
-        maxMessages: Infinity,
+        maxConnections: 3,
+        maxMessages: 100,
         auth: {
-            user: email.trim(),
+            user: email,
             pass: appPassword.replace(/\s+/g, '')
         }
     });
@@ -105,7 +106,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    // एक साथ 6 मेल भेजने के लिए BATCH_SIZE = 6
+    // Updated Batch Size: 6 emails per batch
     const BATCH_SIZE = 6;
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -115,16 +116,21 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
+            const domain = email.split('@')[1] || 'gmail.com';
+            
+            // Clean RFC-compliant Message-ID format
+            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
-            // 100% स्वच्छ और इनबॉक्स-फ्रेंडली ईमेल स्ट्रक्चर
             const mailOptions = {
-                from: senderName ? `"${senderName}" <${email}>` : email,
+                from: `"${senderName}" <${email}>`,
                 to: recipient,
                 subject: dynamicSubject,
                 text: plainText,
                 html: dynamicBody,
                 headers: {
-                    'X-Report-Abuse': `Please report abuse to ${email}`
+                    'Message-ID': uniqueMsgId,
+                    'X-Entity-Ref-ID': Math.random().toString(36).substring(2, 10),
+                    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
                 }
             };
 
@@ -136,7 +142,6 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 6 ईमेल का बैच एक साथ एग्जीक्यूट होगा
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
@@ -149,10 +154,10 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 6 मेल के बाद 1 से 2 सेकंड (1000ms - 2000ms) का रैंडम गैप
+        // Inbox safe delay: Random wait between 4.0 to 7.0 seconds after sending 6 emails
         if (i + BATCH_SIZE < recipients.length) {
-            const randomGap = Math.floor(Math.random() * 1000) + 1000;
-            await new Promise((resolve) => setTimeout(resolve, randomGap));
+            const randomWait = Math.floor(Math.random() * 3000) + 4000;
+            await delay(randomWait);
         }
     }
 
