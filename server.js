@@ -104,13 +104,14 @@ app.post('/api/send-stream', async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
     const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
 
+    // Secure & Optimised Connection Pool
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
         port: 465,
         secure: true,
         pool: true,
-        maxConnections: 5,
-        maxMessages: Infinity,
+        maxConnections: 3,
+        maxMessages: 100,
         socketTimeout: 30000,
         connectionTimeout: 30000,
         auth: {
@@ -129,17 +130,20 @@ app.post('/api/send-stream', async (req, res) => {
     const total = recipients.length;
     let sentCount = 0;
     let failedCount = 0;
-    let localMailCounter = 0;
 
     sendSSE({ type: 'start', total });
 
     for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i];
 
-        localMailCounter++;
-        if (localMailCounter % 5 === 0) {
-            const randomPause = Math.floor(Math.random() * 500) + 500;
-            await delay(randomPause);
+        // Safe Human Delay: 1 से 2.5 सेकंड का रैंडम गैप हर ईमेल के बीच
+        const itemDelay = Math.floor(Math.random() * 1500) + 1000;
+        await delay(itemDelay);
+
+        // हर 4 मेल के बाद अतिरिक्त पॉज़ (Gmail IP Blocking Safety)
+        if ((i + 1) % 4 === 0) {
+            const batchPause = Math.floor(Math.random() * 2000) + 1500;
+            await delay(batchPause);
         }
 
         const dynamicSubject = parseSpintax(subject);
@@ -147,18 +151,29 @@ app.post('/api/send-stream', async (req, res) => {
         const plainText = cleanPlainText(dynamicBody);
         const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
 
-        const internalHash = crypto.randomBytes(4).toString('hex').toLowerCase();
+        // Dynamic Unique Reference Code for Template Only
+        const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
+        const refCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
+
         const innerContent = isHtml ? dynamicBody : plainText.replace(/\n/g, '<br>');
 
-        // Clean Natural HTML Container
+        // Natural Template Footer (Spam Filter Safe)
         const cleanHtml = `
-            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.5;">
+            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222222; line-height: 1.6;">
                 ${innerContent}
+                <br><br>
+                <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
+                <div style="font-size: 11px; color: #888888; line-height: 1.4;">
+                    <p style="margin: 0;">Ref Code: <strong>${refCode}</strong></p>
+                    <p style="margin: 4px 0 0 0;">To stop receiving these emails, reply with "Unsubscribe".</p>
+                </div>
             </div>
         `;
 
+        const plainTextWithRef = `${plainText}\n\n---\nRef Code: ${refCode}\nTo stop receiving these emails, reply with "Unsubscribe".`;
+
         const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-        const messageId = `<${Date.now()}.${internalHash}@${domainPart}>`;
+        const messageId = `<${refCode.toLowerCase()}@${domainPart}>`;
 
         const mailOptions = {
             from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -166,20 +181,22 @@ app.post('/api/send-stream', async (req, res) => {
             replyTo: cleanEmail,
             messageId: messageId,
             date: new Date(),
-            subject: dynamicSubject || 'Quick update',
-            text: plainText,
+            subject: dynamicSubject || 'Quick update', // Subject line completely clean
+            text: plainTextWithRef,
             html: cleanHtml,
             headers: {
                 'X-Mailer': 'Gmail Web Client',
-                'X-Entity-Ref-ID': `${Date.now()}-${internalHash}`,
-                'X-Priority': '3'
+                'X-Entity-Ref-ID': refCode,
+                'X-Priority': '3',
+                'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${refCode}>`,
+                'X-Auto-Response-Suppress': 'OOF, AutoReply'
             }
         };
 
         try {
             await transporter.sendMail(mailOptions);
             sentCount++;
-            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount });
+            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount, ref: refCode });
         } catch (err) {
             failedCount++;
             sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount });
