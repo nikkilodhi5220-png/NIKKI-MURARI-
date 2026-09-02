@@ -37,8 +37,7 @@ function parseSpintax(text) {
 }
 
 function stripHtml(html) {
-    if (!html) return '';
-    return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+    return html.replace(/<[^>]*>?/gm, '').trim();
 }
 
 async function verifyTurnstile(token) {
@@ -80,14 +79,13 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // 5 का बैच एक साथ प्रोसेस करने के लिए Pool Connections सेट किया गया है
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
-        maxConnections: 5, // 5 कनेक्शन एक साथ हैंडल करने के लिए
-        maxMessages: Infinity,
+        maxConnections: 2,
+        maxMessages: 100,
         auth: {
-            user: email.trim(),
+            user: email,
             pass: appPassword.replace(/\s+/g, '')
         }
     });
@@ -105,8 +103,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    // रिक्वायरमेंट के अनुसार एक साथ 5 मेल भेजने के लिए BATCH_SIZE = 5
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 2; // Strict requirement: 2 emails per batch
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         const batch = recipients.slice(i, i + BATCH_SIZE);
@@ -115,16 +112,20 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
+            const domain = email.split('@')[1] || 'gmail.com';
+            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
-            // स्पैम से बचने के लिए स्वच्छ और मानक मेल स्ट्रक्चर (Standard Gmail-friendly payload)
             const mailOptions = {
-                from: senderName ? `"${senderName}" <${email}>` : email,
+                from: `"${senderName}" <${email}>`,
                 to: recipient,
                 subject: dynamicSubject,
                 text: plainText,
                 html: dynamicBody,
                 headers: {
-                    'X-Report-Abuse': `Please report abuse to ${email}`
+                    'Message-ID': uniqueMsgId,
+                    'X-Mailer': 'SecureMailConsole/1.0',
+                    'X-Priority': '3',
+                    'Auto-Submitted': 'auto-generated'
                 }
             };
 
@@ -136,7 +137,6 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 5 मेल एक साथ प्रोसेस होंगे
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
@@ -149,9 +149,9 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 5 मेल सेंड होने के बाद 1 सेकंड (1000ms) का गैप
+        // 2-second interval between batches for inbox protection
         if (i + BATCH_SIZE < recipients.length) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            await new Promise((resolve) => setTimeout(resolve, 2000));
         }
     }
 
