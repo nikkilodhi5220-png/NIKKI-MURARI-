@@ -28,6 +28,7 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
+// Spintax syntax parser: {Hi|Hello|Greetings}
 function parseSpintax(text) {
     if (!text) return '';
     return text.replace(/\{([^{}]+)\}/g, (match, choices) => {
@@ -37,10 +38,10 @@ function parseSpintax(text) {
 }
 
 function stripHtml(html) {
-    return html.replace(/<[^>]*>?/gm, '').trim();
+    if (!html) return '';
+    return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
 }
 
-// Random delay function to fool spam heuristics (Human behavior simulation)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function verifyTurnstile(token) {
@@ -82,13 +83,14 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // 6 पैरेलल कनेक्शंस के लिए उपयुक्त कनेक्शन पूल सेटिंग्स
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
-        maxConnections: 3,
-        maxMessages: 100,
+        maxConnections: 6,
+        maxMessages: Infinity,
         auth: {
-            user: email,
+            user: email.trim(),
             pass: appPassword.replace(/\s+/g, '')
         }
     });
@@ -106,7 +108,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    // Updated Batch Size: 6 emails per batch
+    // 6-6 ईमेल का बैच
     const BATCH_SIZE = 6;
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -116,21 +118,16 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
-            const domain = email.split('@')[1] || 'gmail.com';
-            
-            // Clean RFC-compliant Message-ID format
-            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
+            // मानक और स्पैम-मुक्त ईमेल विकल्प (Gmail को मैसेज ID खुद जेनरेट करने दें)
             const mailOptions = {
-                from: `"${senderName}" <${email}>`,
-                to: recipient,
+                from: senderName ? `"${senderName.trim()}" <${email.trim()}>` : email.trim(),
+                to: recipient.trim(),
                 subject: dynamicSubject,
                 text: plainText,
                 html: dynamicBody,
                 headers: {
-                    'Message-ID': uniqueMsgId,
-                    'X-Entity-Ref-ID': Math.random().toString(36).substring(2, 10),
-                    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+                    'X-Report-Abuse': `Please report abuse to ${email.trim()}`
                 }
             };
 
@@ -154,9 +151,9 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // Inbox safe delay: Random wait between 4.0 to 7.0 seconds after sending 6 emails
+        // 6 ईमेल सेंड होने के बाद 3.5 से 6.0 सेकंड का ह्यूमन-लाइक रैंडम डिले
         if (i + BATCH_SIZE < recipients.length) {
-            const randomWait = Math.floor(Math.random() * 3000) + 4000;
+            const randomWait = Math.floor(Math.random() * 2500) + 3500;
             await delay(randomWait);
         }
     }
