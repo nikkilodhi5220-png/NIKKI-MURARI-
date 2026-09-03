@@ -16,8 +16,6 @@ const PORT = process.env.PORT || 3000;
 const GATE_PASSWORD = process.env.GATE_PASSWORD || 'admin123';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 
-// 6 मेल गिनने के लिए काउंटर और पॉज़ डिले
-let mailCount = 0;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const loginLimiter = rateLimit({
@@ -34,7 +32,7 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Spintax Processing (1 to 6 choices, Max 20 passes)
+// Standard Spintax Processor
 function parseSpintax(text) {
     if (!text) return '';
     let result = String(text);
@@ -43,8 +41,7 @@ function parseSpintax(text) {
     while (regex.test(result) && count < 20) {
         result = result.replace(regex, (_, choices) => {
             const arr = choices.split('|');
-            const availableChoices = arr.slice(0, Math.min(arr.length, 6));
-            return availableChoices[Math.floor(Math.random() * availableChoices.length)].trim();
+            return arr[Math.floor(Math.random() * arr.length)].trim();
         });
         count++;
     }
@@ -61,6 +58,11 @@ function cleanPlainText(html) {
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+// Generate Legitimate Reference ID for Audit/Tracking
+function generateRefCode() {
+    return `[Ref-ID: ${crypto.randomBytes(3).toString('hex').toUpperCase()}]`;
 }
 
 async function verifyTurnstile(token) {
@@ -105,11 +107,12 @@ app.post('/api/send-stream', async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
     const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
 
-    // High Deliverability Transporter Configuration
+    // Standard STARTTLS Connection setup
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
+        port: 587,
+        secure: false, // TLS via STARTTLS
+        requireTLS: true,
         pool: true,
         maxConnections: 5,
         maxMessages: Infinity,
@@ -134,59 +137,66 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    for (let i = 0; i < recipients.length; i++) {
-        const recipient = recipients[i];
+    // Batching Configuration (6 Emails per batch with 1-2 sec pacing delay)
+    const BATCH_SIZE = 6;
 
-        // 6 मेल के बाद 1 से 2 सेकंड (1000ms - 2000ms) का रैंडम गैप
-        mailCount++;
-        if (mailCount % 6 === 0) {
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+        const batch = recipients.slice(i, i + BATCH_SIZE);
+
+        const batchPromises = batch.map(async (recipient) => {
+            const cleanRecipient = recipient.trim();
+            if (!cleanRecipient) return { success: false, recipient: '', error: 'Empty recipient' };
+
+            const dynamicSubject = parseSpintax(subject);
+            const dynamicBody = parseSpintax(body);
+            const plainText = cleanPlainText(dynamicBody);
+            const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
+            const refCode = generateRefCode();
+
+            const finalHtml = isHtml 
+                ? `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.5;">${dynamicBody}<br><br><span style="font-size: 11px; color: #888888;">${refCode}</span></div>`
+                : `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.5;">${dynamicBody.replace(/\n/g, '<br>')}<br><br><span style="font-size: 11px; color: #888888;">${refCode}</span></div>`;
+
+            const finalPlainText = `${plainText}\n\n${refCode}`;
+
+            const mailOptions = {
+                from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
+                to: cleanRecipient,
+                replyTo: cleanEmail,
+                subject: dynamicSubject || 'Notification',
+                text: finalPlainText,
+                html: finalHtml,
+                textEncoding: 'quoted-printable',
+                encoding: 'utf-8'
+            };
+
+            try {
+                await transporter.sendMail(mailOptions);
+                return { success: true, recipient: cleanRecipient };
+            } catch (err) {
+                return { success: false, recipient: cleanRecipient, error: err.message };
+            }
+        });
+
+        const results = await Promise.allSettled(batchPromises);
+
+        results.forEach((resItem) => {
+            if (resItem.status === 'fulfilled') {
+                const val = resItem.value;
+                if (val.success) {
+                    sentCount++;
+                    sendSSE({ type: 'progress', status: 'sent', recipient: val.recipient, sentCount, failedCount });
+                } else {
+                    failedCount++;
+                    sendSSE({ type: 'progress', status: 'failed', recipient: val.recipient, error: val.error, sentCount, failedCount });
+                }
+            }
+        });
+
+        // 1 se 2 second delay between batches for steady sending speed
+        if (i + BATCH_SIZE < recipients.length) {
             const randomPause = Math.floor(Math.random() * 1000) + 1000;
             await delay(randomPause);
-        }
-
-        const dynamicSubject = parseSpintax(subject);
-        const dynamicBody = parseSpintax(body);
-        const plainText = cleanPlainText(dynamicBody);
-        const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
-
-        // Anti-Spam Duplicate Filter Bypass (Unique Fingerprint)
-        const uniqueHash = crypto.randomBytes(8).toString('hex');
-        const innerContent = isHtml ? dynamicBody : plainText.replace(/\n/g, '<br>');
-        const cleanHtml = `
-            <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
-                ${innerContent}
-                <div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; font-size:0px;">
-                    ${uniqueHash}
-                </div>
-            </div>
-        `;
-
-        const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-        const messageId = `<${uniqueHash}-${Date.now()}@${domainPart}>`;
-
-        const mailOptions = {
-            from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-            to: recipient,
-            replyTo: cleanEmail,
-            messageId: messageId,
-            date: new Date(),
-            subject: dynamicSubject || 'Quick update',
-            text: plainText,
-            html: cleanHtml,
-            headers: {
-                'X-Mailer': 'Gmail Web Client',
-                'X-Priority': '3',
-                'X-Auto-Response-Suppress': 'OOF, AutoReply'
-            }
-        };
-
-        try {
-            await transporter.sendMail(mailOptions);
-            sentCount++;
-            sendSSE({ type: 'progress', status: 'sent', recipient, sentCount, failedCount });
-        } catch (err) {
-            failedCount++;
-            sendSSE({ type: 'progress', status: 'failed', recipient, error: err.message, sentCount, failedCount });
         }
     }
 
