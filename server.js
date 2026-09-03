@@ -3,10 +3,11 @@ const nodemailer = require('nodemailer');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -28,7 +29,7 @@ app.post('/api/auth', loginLimiter, (req, res) => {
     return res.status(401).json({ success: false, message: 'Incorrect password' });
 });
 
-// Spintax syntax parser: {Hi|Hello|Greetings}
+// Spintax syntax parser
 function parseSpintax(text) {
     if (!text) return '';
     return text.replace(/\{([^{}]+)\}/g, (match, choices) => {
@@ -40,6 +41,11 @@ function parseSpintax(text) {
 function stripHtml(html) {
     if (!html) return '';
     return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+}
+
+// Random Unique Reference Code Generator
+function generateRefCode() {
+    return `[Ref-ID: ${crypto.randomBytes(3).toString('hex').toUpperCase()}]`;
 }
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -83,7 +89,6 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // 6 पैरेलल कनेक्शंस के लिए उपयुक्त कनेक्शन पूल सेटिंग्स
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         pool: true,
@@ -92,7 +97,9 @@ app.post('/api/send-stream', async (req, res) => {
         auth: {
             user: email.trim(),
             pass: appPassword.replace(/\s+/g, '')
-        }
+        },
+        connectionTimeout: 15000,
+        socketTimeout: 15000
     });
 
     try {
@@ -108,7 +115,6 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    // 6-6 ईमेल का बैच
     const BATCH_SIZE = 6;
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -117,16 +123,27 @@ app.post('/api/send-stream', async (req, res) => {
         const batchPromises = batch.map(async (recipient) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
-            const plainText = stripHtml(dynamicBody);
+            const refCode = generateRefCode();
 
-            // मानक और स्पैम-मुक्त ईमेल विकल्प (Gmail को मैसेज ID खुद जेनरेट करने दें)
+            // Append Reference Code to HTML and Text Content
+            const isHtml = /<[a-z][\s\S]*>/i.test(dynamicBody);
+            
+            const finalHtml = isHtml 
+                ? `${dynamicBody}<br><br><span style="font-size:11px;color:#888888;font-family:monospace;">${refCode}</span>`
+                : `<div style="font-family:sans-serif;font-size:14px;line-height:1.5;color:#111111;">${dynamicBody.replace(/\n/g, '<br>')}<br><br><span style="font-size:11px;color:#888888;font-family:monospace;">${refCode}</span></div>`;
+
+            const finalPlainText = `${stripHtml(dynamicBody)}\n\n${refCode}`;
+
             const mailOptions = {
                 from: senderName ? `"${senderName.trim()}" <${email.trim()}>` : email.trim(),
                 to: recipient.trim(),
                 subject: dynamicSubject,
-                text: plainText,
-                html: dynamicBody,
+                text: finalPlainText,
+                html: finalHtml,
+                textEncoding: 'quoted-printable',
+                encoding: 'utf-8',
                 headers: {
+                    'X-Mailer': 'NodeMailer Engine',
                     'X-Report-Abuse': `Please report abuse to ${email.trim()}`
                 }
             };
@@ -151,10 +168,10 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 6 ईमेल सेंड होने के बाद 3.5 से 6.0 सेकंड का ह्यूमन-लाइक रैंडम डिले
+        // 1 se 2 second (1000ms - 2000ms) gap between batches
         if (i + BATCH_SIZE < recipients.length) {
-            const randomWait = Math.floor(Math.random() * 2500) + 3500;
-            await delay(randomWait);
+            const fastGap = Math.floor(1000 + Math.random() * 1000);
+            await delay(fastGap);
         }
     }
 
