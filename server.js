@@ -68,7 +68,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 5,
+      maxConnections: 3, // Batch size ke barabar rakha gaya hai balance ke liye
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000
@@ -220,7 +220,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE
+   STREAMING DISPATCH ROUTE (3 Emails Batch + Sub-second Delay)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -257,7 +257,8 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  const BATCH_SIZE = 5;
+  // FIX: Batch size exact 3 emails
+  const BATCH_SIZE = 3;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -318,8 +319,9 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
+    // FIX: Delay between 3-email batches is strictly sub-second (500ms - 900ms)
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(1000 + Math.random() * 500);
+      const batchDelay = Math.floor(500 + Math.random() * 400); // 500ms to 900ms
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
