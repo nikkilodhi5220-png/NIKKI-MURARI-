@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,7 +50,7 @@ async function verifyTurnstileToken(token, remoteIp) {
 }
 
 /* ==========================================================================
-   GMAIL TLS TRANSPORTER POOL (Optimized Connection Limits)
+   GMAIL TLS TRANSPORTER POOL
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -67,7 +68,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 5, // Standard Gmail concurrent limit
+      maxConnections: 5,
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000
@@ -219,7 +220,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE (RFC Compliant Batch Dispatch)
+   STREAMING DISPATCH ROUTE
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -247,6 +248,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
+  const senderDomain = cleanEmail.split('@')[1] || 'gmail.com';
   globalSession.stopRequested = false;
 
   const keepAlivePing = setInterval(() => {
@@ -255,7 +257,6 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  // Safe batching setup for standard SMTP servers
   const BATCH_SIZE = 5;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
@@ -283,6 +284,7 @@ app.post('/api/send-stream', async (req, res) => {
         }
 
         const plainTextFormatted = createPlainTextFromHtml(formattedHtml);
+        const uniqueMsgId = `<${crypto.randomBytes(16).toString('hex')}@${senderDomain}>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -291,6 +293,11 @@ app.post('/api/send-stream', async (req, res) => {
           subject: personalizedSubject || 'No Subject',
           html: formattedHtml,
           text: plainTextFormatted,
+          headers: {
+            'Message-ID': uniqueMsgId,
+            'Auto-Submitted': 'auto-generated',
+            'X-Mailer': 'NodeMailer Standard Client'
+          },
           textEncoding: 'quoted-printable',
           encoding: 'utf-8'
         };
@@ -311,7 +318,6 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // Pacing delay to avoid connection throttling
     if (i + BATCH_SIZE < recipients.length) {
       const batchDelay = Math.floor(1000 + Math.random() * 500);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
