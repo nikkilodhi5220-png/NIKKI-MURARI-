@@ -75,7 +75,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 3, // Gmail connections limit per user
+      maxConnections: 2, // Gmail rate limits ke liye safest threshold
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000,
@@ -235,7 +235,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   DISPATCH ROUTE
+   DISPATCH ROUTE (HIGH DELIVERABILITY ENHANCED)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -281,7 +281,7 @@ app.post('/api/send-stream', async (req, res) => {
     const currentBatch = recipients.slice(i, i + BATCH_SIZE);
 
     const sendPromises = currentBatch.map(async (rawRecipient, index) => {
-      await delay(index * 200); // 200ms stagger between requests
+      await delay(index * 250); // Staggering threads
       
       const recipient = parseRecipientData(rawRecipient);
 
@@ -296,9 +296,13 @@ app.post('/api/send-stream', async (req, res) => {
 
         const formattedHtml = isHtml 
           ? personalizedBody 
-          : `<div style="font-family: sans-serif; font-size: 14px; line-height: 1.5; color: #333333;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
+          : `<div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
         
         const plainTextFormatted = createPlainTextFromHtml(personalizedBody);
+
+        // Dynamic RFC-Compliant Message ID
+        const domainName = cleanEmail.includes('@') ? cleanEmail.split('@')[1] : 'gmail.com';
+        const customMessageId = `<${crypto.randomBytes(12).toString('hex')}.${Date.now()}@${domainName}>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -306,7 +310,12 @@ app.post('/api/send-stream', async (req, res) => {
           replyTo: cleanEmail,
           subject: personalizedSubject || 'Update',
           html: formattedHtml,
-          text: plainTextFormatted
+          text: plainTextFormatted,
+          headers: {
+            'Message-ID': customMessageId,
+            'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+          }
         };
 
         const info = await transporter.sendMail(mailOptions);
@@ -331,7 +340,7 @@ app.post('/api/send-stream', async (req, res) => {
     }
 
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(Math.random() * 1000) + 1500; // 1.5s - 2.5s batch delay
+      const batchDelay = Math.floor(Math.random() * 1500) + 2000; // 2s - 3.5s batch pause for domain safety
       await delay(batchDelay);
     }
   }
