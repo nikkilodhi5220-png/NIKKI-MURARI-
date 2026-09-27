@@ -18,7 +18,6 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x000000000000
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
 
-// Dynamic Helper Delays
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Express Setup
@@ -54,14 +53,14 @@ async function verifyTurnstileToken(token, remoteIp) {
 }
 
 /* ==========================================================================
-   GMAIL TLS TRANSPORTER POOL (Optimized TLS & Connections)
+   STANDARD GMAIL TRANSPORTER POOL
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
   const cleanPass = appPassword.replace(/\s+/g, '').trim();
   const key = `port587_${cleanEmail}_${cleanPass}`;
 
-  if (poolMap.size > 100) {
+  if (poolMap.size > 50) {
     poolMap.clear();
   }
 
@@ -76,7 +75,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6,
+      maxConnections: 3, // Gmail connections limit per user
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000,
@@ -91,7 +90,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   RECIPIENT & SPINTAX HELPERS WITH INVISIBLE SPAM-BYPASS HASH
+   RECIPIENT & PERSONALIZATION HELPERS
    ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
@@ -156,16 +155,6 @@ function parseSpintax(text) {
     iterations++;
   }
   return spun.replace(/[\{\}]/g, '').trim();
-}
-
-// Zero-width space generator: Unseen by users, but changes body cryptographic fingerprint for Spam Bypassing
-function getInvisibleHash() {
-  const zeroWidthChars = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
-  let hash = '';
-  for (let i = 0; i < 6; i++) {
-    hash += zeroWidthChars[Math.floor(Math.random() * zeroWidthChars.length)];
-  }
-  return hash;
 }
 
 function personalizeContent(template, recipient) {
@@ -246,7 +235,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   INBOX-OPTIMIZED DISPATCH ROUTE (Batch 6 + Micro-Staggering)
+   DISPATCH ROUTE
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -281,7 +270,7 @@ app.post('/api/send-stream', async (req, res) => {
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 6;
+  const BATCH_SIZE = 5;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -291,9 +280,8 @@ app.post('/api/send-stream', async (req, res) => {
 
     const currentBatch = recipients.slice(i, i + BATCH_SIZE);
 
-    // Micro-staggering inside the batch to avoid simultaneous TLS handshake flags
     const sendPromises = currentBatch.map(async (rawRecipient, index) => {
-      await delay(index * 150); // 150ms delay per thread in batch
+      await delay(index * 200); // 200ms stagger between requests
       
       const recipient = parseRecipientData(rawRecipient);
 
@@ -306,21 +294,17 @@ app.post('/api/send-stream', async (req, res) => {
         const personalizedBody = personalizeContent(messageBody, recipient);
         const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-        const invisibleSalt = getInvisibleHash();
-        const innerContent = isHtml 
+        const formattedHtml = isHtml 
           ? personalizedBody 
-          : personalizedBody.replace(/\n/g, '<br>');
+          : `<div style="font-family: sans-serif; font-size: 14px; line-height: 1.5; color: #333333;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
+        
+        const plainTextFormatted = createPlainTextFromHtml(personalizedBody);
 
-        // Natural HTML block without marketing wrapper signatures
-        const formattedHtml = `${innerContent}${invisibleSalt}`;
-        const plainTextFormatted = createPlainTextFromHtml(personalizedBody) + invisibleSalt;
-
-        // Clean natural email payload
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
           replyTo: cleanEmail,
-          subject: (personalizedSubject || 'Update') + invisibleSalt,
+          subject: personalizedSubject || 'Update',
           html: formattedHtml,
           text: plainTextFormatted
         };
@@ -346,9 +330,8 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // 1 to 2 seconds randomized delay between 6-mail batches
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(Math.random() * 1000) + 1000;
+      const batchDelay = Math.floor(Math.random() * 1000) + 1500; // 1.5s - 2.5s batch delay
       await delay(batchDelay);
     }
   }
