@@ -20,15 +20,11 @@ const poolMap = new Map();
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Express Setup
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-/* ==========================================================================
-   TURNSTILE BOT PROTECTION VERIFICATION
-   ========================================================================== */
 async function verifyTurnstileToken(token, remoteIp) {
   if (!token || TURNSTILE_SECRET_KEY.startsWith('1x0000000000000000000000000000000AA')) {
     return true;
@@ -52,9 +48,6 @@ async function verifyTurnstileToken(token, remoteIp) {
   }
 }
 
-/* ==========================================================================
-   STANDARD GMAIL TRANSPORTER POOL
-   ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
   const cleanPass = appPassword.replace(/\s+/g, '').trim();
@@ -75,8 +68,8 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 2, // Gmail rate limits ke liye safest threshold
-      maxMessages: 100,
+      maxConnections: 1,
+      maxMessages: 50,
       socketTimeout: 30000,
       connectionTimeout: 30000,
       tls: {
@@ -89,9 +82,6 @@ function getPort587Transporter(email, appPassword) {
   return poolMap.get(key);
 }
 
-/* ==========================================================================
-   RECIPIENT & PERSONALIZATION HELPERS
-   ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
   let rawName = '';
@@ -190,14 +180,9 @@ function createPlainTextFromHtml(html) {
     .trim();
 }
 
-/* ==========================================================================
-   API ROUTES
-   ========================================================================== */
 app.get('/', (req, res) => {
-  const filePath1 = path.join(process.cwd(), 'public', 'index.html');
-  const filePath2 = path.join(__dirname, 'public', 'index.html');
-  if (fs.existsSync(filePath1)) return res.sendFile(filePath1);
-  if (fs.existsSync(filePath2)) return res.sendFile(filePath2);
+  const filePath = path.join(__dirname, 'public', 'index.html');
+  if (fs.existsSync(filePath)) return res.sendFile(filePath);
   return res.status(200).send('<h1>Server Running Safely</h1>');
 });
 
@@ -235,7 +220,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   DISPATCH ROUTE (HIGH DELIVERABILITY ENHANCED)
+   DISPATCH ROUTE (INBOX OPTIMIZED - BATCH SIZE: 2)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -270,7 +255,9 @@ app.post('/api/send-stream', async (req, res) => {
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 5;
+  
+  // Exact Batch Size of 2 for maximum Primary Inbox placement
+  const BATCH_SIZE = 2;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -281,7 +268,7 @@ app.post('/api/send-stream', async (req, res) => {
     const currentBatch = recipients.slice(i, i + BATCH_SIZE);
 
     const sendPromises = currentBatch.map(async (rawRecipient, index) => {
-      await delay(index * 250); // Staggering threads
+      await delay(index * 600); // 600ms stagger delay between batch elements
       
       const recipient = parseRecipientData(rawRecipient);
 
@@ -296,13 +283,12 @@ app.post('/api/send-stream', async (req, res) => {
 
         const formattedHtml = isHtml 
           ? personalizedBody 
-          : `<div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
+          : `<div style="font-family: Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #111111;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
         
         const plainTextFormatted = createPlainTextFromHtml(personalizedBody);
 
-        // Dynamic RFC-Compliant Message ID
         const domainName = cleanEmail.includes('@') ? cleanEmail.split('@')[1] : 'gmail.com';
-        const customMessageId = `<${crypto.randomBytes(12).toString('hex')}.${Date.now()}@${domainName}>`;
+        const customMessageId = `<${crypto.randomBytes(16).toString('hex')}.${Date.now()}@${domainName}>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -313,6 +299,7 @@ app.post('/api/send-stream', async (req, res) => {
           text: plainTextFormatted,
           headers: {
             'Message-ID': customMessageId,
+            'X-Mailer': 'Secure Mail Console Engine v1.0',
             'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
             'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
           }
@@ -340,7 +327,8 @@ app.post('/api/send-stream', async (req, res) => {
     }
 
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(Math.random() * 1500) + 2000; // 2s - 3.5s batch pause for domain safety
+      // Dynamic random delay between batches (3s to 5s) to mimic natural human sending
+      const batchDelay = Math.floor(Math.random() * 2000) + 3000;
       await delay(batchDelay);
     }
   }
