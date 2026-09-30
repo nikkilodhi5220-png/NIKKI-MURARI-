@@ -102,6 +102,10 @@
                         <p class="help-subtext">Paste emails (comma, space, or newline separated)</p>
                         <div class="form-group flex-grow" style="margin-bottom: 0;">
                             <textarea id="recipients-input" placeholder="john@example.com&#10;jane@example.com"></textarea>
+                            <div id="email-validation-error" class="error-message hidden" style="margin-top: 0.5rem;">
+                                <i class="fa-solid fa-circle-exclamation"></i>
+                                <span>No valid recipient emails detected.</span>
+                            </div>
                         </div>
                     </div>
 
