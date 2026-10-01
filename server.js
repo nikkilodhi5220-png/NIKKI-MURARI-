@@ -63,7 +63,7 @@ function getPort587Transporter(email, appPassword) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
-      secure: false,
+      secure: false, // TLS via STARTTLS
       requireTLS: true,
       auth: {
         user: cleanEmail,
@@ -261,7 +261,8 @@ app.post('/api/send-stream', async (req, res) => {
     const currentBatch = recipients.slice(i, i + BATCH_SIZE);
 
     const sendPromises = currentBatch.map(async (rawRecipient, index) => {
-      await delay(index * 600);
+      // Small staggered offset within same batch
+      await delay(index * 800);
       
       const recipient = parseRecipientData(rawRecipient);
 
@@ -276,23 +277,24 @@ app.post('/api/send-stream', async (req, res) => {
 
         const formattedHtml = isHtml 
           ? personalizedBody 
-          : `<div style="font-family: Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #111111;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
+          : `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #222222;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
         
         const plainTextFormatted = createPlainTextFromHtml(personalizedBody);
 
-        const domainName = cleanEmail.includes('@') ? cleanEmail.split('@')[1] : 'gmail.com';
-        const customMessageId = `<${crypto.randomBytes(16).toString('hex')}.${Date.now()}@${domainName}>`;
+        const senderDomain = cleanEmail.includes('@') ? cleanEmail.split('@')[1] : 'gmail.com';
+        const customMessageId = `<${crypto.randomBytes(12).toString('hex')}.${Date.now()}@${senderDomain}>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
           replyTo: cleanEmail,
-          subject: personalizedSubject || 'Update',
+          subject: personalizedSubject || 'Hello',
           html: formattedHtml,
           text: plainTextFormatted,
           headers: {
             'Message-ID': customMessageId,
-            'X-Mailer': 'Secure Mail Console Engine v1.0',
+            'MIME-Version': '1.0',
+            'X-Mailer': 'Microsoft Outlook 16.0', // Standard mail client signature to pass spam filters
             'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe>`,
             'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
           }
@@ -319,8 +321,9 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
+    // Safe human-like delay between batches (3.5 - 6.5 seconds)
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(Math.random() * 2000) + 3000;
+      const batchDelay = Math.floor(Math.random() * 3000) + 3500;
       await delay(batchDelay);
     }
   }
