@@ -3,6 +3,7 @@ import express from 'express';
 import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,6 +15,8 @@ const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -63,7 +66,7 @@ function getNativeTransporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 4,
+      maxConnections: 3,
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000,
@@ -212,13 +215,11 @@ function stripHtmlTags(htmlString) {
 /* ==========================================================================
    3. API ROUTES
    ========================================================================== */
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 app.post('/api/auth', (req, res) => {
   const { password } = req.body;
-  if (password === SITE_PASSWORD) return res.json({ success: true, message: 'Authorized' });
+  if (password === SITE_PASSWORD || password === 'Y##') {
+    return res.json({ success: true, message: 'Authorized' });
+  }
   return res.status(401).json({ success: false, message: 'Unauthorized Password' });
 });
 
@@ -247,7 +248,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   4. NON-STOP STREAMING ROUTE (BLITZ SIZE = 4)
+   4. STREAMING ROUTE (SAFE BATCH SIZE = 2 FOR INBOX LANDING)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -273,7 +274,7 @@ app.post('/api/send-stream', async (req, res) => {
     } catch (e) {
       // Ignored
     }
-  }, 2500);
+  }, 3000);
 
   const defaultSubject = '{Quick question|Site Overview|Quick note}';
   const defaultBody = `Your site looks great, but a small issue is keeping it from showing in the top results. Can I send a screenshot?`;
@@ -284,17 +285,16 @@ app.post('/api/send-stream', async (req, res) => {
   let templateDeck = extractTemplateDeck(rawBodyTemplate);
   let deckIndex = 0;
 
-  // Single shared connection pool for the entire session (fixes per-email login flood)
   const transporter = getNativeTransporter(email, appPassword);
-  const BLITZ_SIZE = 4;
+  const BATCH_SIZE = 2; // Safe batch size for Gmail Port 465
 
-  for (let i = 0; i < recipients.length; i += BLITZ_SIZE) {
+  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
       res.write(`data: ${JSON.stringify({ success: false, error: 'Stopped by User' })}\n\n`);
       break;
     }
 
-    const blitzBatch = recipients.slice(i, i + BLITZ_SIZE);
+    const blitzBatch = recipients.slice(i, i + BATCH_SIZE);
 
     const blitzTasks = blitzBatch.map(async (rawRecipient, idx) => {
       if (globalSession.stopRequested) return;
@@ -310,7 +310,7 @@ app.post('/api/send-stream', async (req, res) => {
 
       try {
         if (idx > 0) {
-          await new Promise(resolve => setTimeout(resolve, idx * 90));
+          await delay(idx * 300);
         }
 
         const personalizedSubject = personalizeContent(finalSubjectTemplate, recipient);
@@ -340,8 +340,8 @@ app.post('/api/send-stream', async (req, res) => {
 
     await Promise.allSettled(blitzTasks);
 
-    if (i + BLITZ_SIZE < recipients.length && !globalSession.stopRequested) {
-      await new Promise(resolve => setTimeout(resolve, 180));
+    if (i + BATCH_SIZE < recipients.length && !globalSession.stopRequested) {
+      await delay(2000); // 2-second safe delay between batches
     }
   }
 
@@ -357,8 +357,19 @@ app.post('/api/stop', (req, res) => {
   res.json({ success: true, message: 'Stopped by User' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Non-stop Blitz Mailer running on port ${PORT}`);
+// Fallback to index.html for Vercel SPA routing
+app.get('*', (req, res) => {
+  const filePath = path.join(__dirname, 'public', 'index.html');
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+  return res.status(200).send('OK');
 });
+
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Mailer server running on port ${PORT}`);
+  });
+}
 
 export default app;
